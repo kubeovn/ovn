@@ -8888,7 +8888,10 @@ build_route_match(const struct ovn_port *op_inport, const char *network_s,
      * routing. */
     if (is_src_route) {
         dir = "src";
-        *priority = plen * 2;
+        *priority = 1;
+        if ((is_ipv4 && plen == 32) || (plen == 128)) {
+            *priority = 2;
+        }
     } else {
         dir = "dst";
         *priority = (plen * 2) + 1;
