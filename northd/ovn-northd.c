@@ -12338,10 +12338,6 @@ ovnnb_db_run(struct northd_context *ctx,
 
     smap_destroy(&options);
 
-    /* Update the probe interval. */
-    northd_probe_interval_nb = get_probe_interval(ovnnb_db, nb);
-    northd_probe_interval_sb = get_probe_interval(ovnsb_db, nb);
-
     use_logical_dp_groups = smap_get_bool(&nb->options,
                                           "use_logical_dp_groups", false);
     controller_event_en = smap_get_bool(&nb->options,
@@ -13413,6 +13409,14 @@ main(int argc, char *argv[])
         unixctl_server_wait(unixctl);
         if (exiting) {
             poll_immediate_wake();
+        }
+        
+        const struct nbrec_nb_global *nb =
+            nbrec_nb_global_first(ovnnb_idl_loop.idl);
+        /* Update the probe interval. */
+        if (nb) {
+            northd_probe_interval_nb = get_probe_interval(ovnnb_db, nb);
+            northd_probe_interval_sb = get_probe_interval(ovnsb_db, nb);
         }
 
 
