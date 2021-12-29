@@ -5256,10 +5256,12 @@ build_pre_lb(struct ovn_datapath *od, struct hmap *lflows,
      */
     if (vip_configured) {
         if (strlen(svc_ipv4_cidr) != 0) {
-            char *match = xasprintf("ip && ip4.dst == %s", svc_ipv4_cidr);
+            char *match = xasprintf("ip4 && ip4.dst == %s", svc_ipv4_cidr);
             ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
                           100, match, REGBIT_CONNTRACK_NAT" = 1; next;");
             free(match);
+            ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
+                          100, "ip6", REGBIT_CONNTRACK_NAT" = 1; next;");
         } else {
             ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
                           100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;");
