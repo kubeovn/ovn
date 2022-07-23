@@ -265,4 +265,9 @@ BUILD_ASSERT_DECL(SCTP_INIT_CHUNK_LEN == sizeof(struct sctp_init_chunk));
 /* The number of tables for the ingress and egress pipelines. */
 #define LOG_PIPELINE_LEN 29
 
+void daemon_started_recently_countdown(void);
+void daemon_started_recently_ignore(void);
+bool daemon_started_recently(void);
+int64_t daemon_startup_ts(void);
+
 #endif
