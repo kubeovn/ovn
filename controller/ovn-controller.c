@@ -89,6 +89,7 @@ static unixctl_cb_func debug_dump_local_bindings;
 static unixctl_cb_func lflow_cache_flush_cmd;
 static unixctl_cb_func lflow_cache_show_stats_cmd;
 static unixctl_cb_func debug_delay_nb_cfg_report;
+static unixctl_cb_func debug_ignore_startup_delay;
 
 #define DEFAULT_BRIDGE_NAME "br-int"
 #define DEFAULT_DATAPATH "system"
@@ -869,6 +870,7 @@ store_nb_cfg(struct ovsdb_idl_txn *sb_txn, struct ovsdb_idl_txn *ovs_txn,
     struct ofctrl_acked_seqnos *acked_nb_cfg_seqnos =
         ofctrl_acked_seqnos_get(ofctrl_seq_type_nb_cfg);
     uint64_t cur_cfg = acked_nb_cfg_seqnos->last_acked;
+    int64_t startup_ts = daemon_startup_ts();
 
     if (ovs_txn && br_int
             && startup_ts != smap_get_ullong(&br_int->external_ids,
@@ -3460,6 +3462,9 @@ main(int argc, char *argv[])
                              debug_dump_local_bindings,
                              &runtime_data->lbinding_data);
 
+    unixctl_command_register("debug/ignore-startup-delay", "", 0, 0,
+                             debug_ignore_startup_delay, NULL);
+
     unsigned int ovs_cond_seqno = UINT_MAX;
     unsigned int ovnsb_cond_seqno = UINT_MAX;
     unsigned int ovnsb_expected_cond_seqno = UINT_MAX;
@@ -3650,6 +3655,10 @@ main(int argc, char *argv[])
                     }
                     stopwatch_stop(CONTROLLER_LOOP_STOPWATCH_NAME,
                                    time_msec());
+                    if (engine_has_updated()) {
+                        daemon_started_recently_countdown();
+                    }
+
                     ct_zones_data = engine_get_data(&en_ct_zones);
                     if (ovs_idl_txn) {
                         if (ct_zones_data) {
@@ -4217,4 +4226,12 @@ debug_dump_local_bindings(struct unixctl_conn *conn, int argc OVS_UNUSED,
     binding_dump_local_bindings(local_bindings, &binding_data);
     unixctl_command_reply(conn, ds_cstr(&binding_data));
     ds_destroy(&binding_data);
+}
+
+static void
+debug_ignore_startup_delay(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                           const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED)
+{
+    daemon_started_recently_ignore();
+    unixctl_command_reply(conn, NULL);
 }

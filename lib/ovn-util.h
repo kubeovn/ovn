@@ -285,4 +285,9 @@ void ddlog_warn(const char *msg);
 void ddlog_err(const char *msg);
 #endif
 
+void daemon_started_recently_countdown(void);
+void daemon_started_recently_ignore(void);
+bool daemon_started_recently(void);
+int64_t daemon_startup_ts(void);
+
 #endif
