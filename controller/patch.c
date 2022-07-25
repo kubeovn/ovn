@@ -334,11 +334,24 @@ patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
 
     /* Now 'existing_ports' only still contains patch ports that exist in the
      * database but shouldn't.  Delete them from the database. */
+
+    /* Wait for some iterations before really deleting any patch ports, because
+     * with conditional monitoring it is possible that related SB data is not
+     * completely downloaded yet after last restart of ovn-controller.
+     * Otherwise it may cause unncessary dataplane interruption during
+     * restart/upgrade. */
+    static int delete_patch_port_delay = 10;
+    if (delete_patch_port_delay > 0) {
+        delete_patch_port_delay--;
+    }
+
     struct shash_node *port_node, *port_next_node;
     SHASH_FOR_EACH_SAFE (port_node, port_next_node, &existing_ports) {
         port = port_node->data;
         shash_delete(&existing_ports, port_node);
-        remove_port(bridge_table, port);
+        if (!delete_patch_port_delay) {
+            remove_port(bridge_table, port);
+        }
     }
     shash_destroy(&existing_ports);
 }
