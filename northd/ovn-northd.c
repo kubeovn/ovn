@@ -97,6 +97,8 @@ static bool check_lsp_is_up;
 static char svc_monitor_mac[ETH_ADDR_STRLEN + 1];
 static struct eth_addr svc_monitor_mac_ea;
 
+static bool bcast_arp_req_flood = true;
+
 /* Default probe interval for NB and SB DB connections. */
 #define DEFAULT_PROBE_INTERVAL_MSEC 5000
 static int northd_probe_interval_nb = 0;
@@ -6784,6 +6786,10 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *lflows)
             ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50,
                           "outport == \"none\"",
                           "outport = \""MC_UNKNOWN"\"; output;");
+            if (!bcast_arp_req_flood) {
+                ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, 90,
+                              "eth.bcast && arp.op == 1", "next;");
+            }
         } else {
             ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_UNKNOWN, 50,
                           "outport == \"none\"", "drop;");
@@ -7044,6 +7050,49 @@ build_lswitch_arp_nd_responder_default(struct ovn_datapath *od,
 {
     if (od->nbs) {
         ovn_lflow_add(lflows, od, S_SWITCH_IN_ARP_ND_RSP, 0, "1", "next;");
+    }
+}
+
+/* Ingress table 18: forward ARP/ND request from localnet/vtep
+ * to logical switch port for known IPs.
+ * (priority 110)*/
+static void
+build_lswitch_arp_nd_forward_for_unknown_ips(struct ovn_port *op,
+                                             struct hmap *lflows,
+                                             struct ds *actions,
+                                             struct ds *match)
+{
+    if (bcast_arp_req_flood) {
+        return;
+    }
+    if (!op->od->nbs) {
+        return;
+    }
+    if (is_vlan_transparent(op->od)) {
+        return;
+    }
+
+    for (size_t i = 0; i < op->od->n_localnet_ports; i++) {
+        struct ovn_port *localnet_port = op->od->localnet_ports[i];
+        if (!localnet_port->nbsp) {
+            continue;
+        }
+
+        for (size_t j = 0; j < op->n_lsp_addrs; j++) {
+            for (size_t k = 0; k < op->lsp_addrs[j].n_ipv4_addrs; k++) {
+                ds_clear(match);
+                ds_put_format(match,
+                              "inport == %s && eth.bcast && "
+                              "arp.op == 1 && arp.tpa == %s",
+                              localnet_port->json_key,
+                              op->lsp_addrs[j].ipv4_addrs[k].addr_s);
+                ds_clear(actions);
+                ds_put_format(actions, "outport = %s; output;",
+                              op->json_key);
+                ovn_lflow_add(lflows, op->od, S_SWITCH_IN_ARP_ND_RSP, 110,
+                              ds_cstr(match), ds_cstr(actions));
+            }
+        }
     }
 }
 
@@ -11771,7 +11820,10 @@ build_lswitch_and_lrouter_iterate_by_op(struct ovn_port *op,
                                              lsi->ports,
                                              &lsi->actions,
                                              &lsi->match);
-    build_lswitch_dhcp_options_and_response(op,lsi->lflows);
+    build_lswitch_arp_nd_forward_for_unknown_ips(op, lsi->lflows,
+                                                 &lsi->actions,
+                                                 &lsi->match);
+    build_lswitch_dhcp_options_and_response(op, lsi->lflows);
     build_lswitch_external_port(op, lsi->lflows);
     build_lswitch_ip_unicast_lookup(op, lsi->lflows, lsi->mcgroups,
                                     &lsi->actions, &lsi->match);
@@ -12929,6 +12981,9 @@ ovnnb_db_run(struct northd_context *ctx,
 
     use_logical_dp_groups = smap_get_bool(&nb->options,
                                           "use_logical_dp_groups", false);
+    bcast_arp_req_flood = smap_get_bool(&nb->options,
+                                        "bcast_arp_req_flood", true);
+
     /* deprecated, use --event instead */
     controller_event_en = smap_get_bool(&nb->options,
                                         "controller_event", false);
