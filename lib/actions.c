@@ -1617,7 +1617,7 @@ encode_SELECT(const struct ovnact_select *select,
     struct ofpact_group *og;
 
     struct ds ds = DS_EMPTY_INITIALIZER;
-    ds_put_format(&ds, "type=select,selection_method=dp_hash");
+    ds_put_format(&ds, "type=select,selection_method=hash,fields=ip_src");
 
     struct mf_subfield sf = expr_resolve_field(&select->res_field);
 
