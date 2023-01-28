@@ -421,13 +421,6 @@ AC_DEFUN([OVN_CHECK_OVS], [
   AC_MSG_CHECKING([for OVS build directory])
   if test X"$with_ovs_build" != X; then
     OVSBUILDDIR=`eval echo "$with_ovs_build"`
-    case $OVSBUILDDIR in
-      /*) ;;
-      *) OVSBUILDDIR=`pwd`/$OVSBUILDDIR ;;
-    esac
-    if test ! -f "$OVSBUILDDIR/config.h"; then
-      AC_ERROR([$OVSBUILDDIR is not a configured OVS build directory])
-    fi
   elif test -f "$OVSDIR/config.h"; then
     # If separate build dir is not specified, use src dir.
     OVSBUILDDIR=$OVSDIR

@@ -37,6 +37,8 @@ AM_CPPFLAGS += -I $(top_builddir)/lib
 
 AM_CPPFLAGS += -I $(OVS_SRCDIR)/include
 AM_CPPFLAGS += -I $(OVS_BUILDDIR)/include
+AM_CPPFLAGS += -I $(OVS_BUILDDIR)/include/windows
+AM_CPPFLAGS += -I $(OVS_BUILDDIR)/datapath-windows/include
 AM_CPPFLAGS += -I $(OVS_SRCDIR)/lib
 AM_CPPFLAGS += -I $(OVS_BUILDDIR)/lib
 AM_CPPFLAGS += -I $(OVS_SRCDIR)
@@ -68,7 +70,7 @@ endif
 # foo/__init__.py into an (older) version with plain foo.py, since
 # foo/__init__.pyc will cause Python to ignore foo.py.
 run_python = \
-	PYTHONPATH=$(OVS_SRCDIR)/python$(psep)$$PYTHONPATH \
+	PYTHONPATH=$(OVS_BUILDDIR)/python$(psep)$$PYTHONPATH \
 	PYTHONDONTWRITEBYTECODE=yes $(PYTHON3)
 
 ALL_LOCAL =
@@ -162,11 +164,11 @@ noinst_HEADERS += $(EXTRA_DIST)
 
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
 ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-read-only: t -*-\n'
-submodules = $(shell grep 'path =' $(srcdir)/.gitmodules | sed -E 's/[\t ]*path =\s*(.*)/\1/g' | xargs)
+submodules = ovs
 
 SUFFIXES += .in
 .in:
-	$(AM_V_GEN)PYTHONPATH=$(OVS_SRCDIR)/python$(psep)$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON3) $(srcdir)/build-aux/soexpand.py -I$(srcdir) -I$(OVS_SRCDIR) < $< | \
+	$(AM_V_GEN)PYTHONPATH=$(OVS_BUILDDIR)/python$(psep)$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON3) $(srcdir)/build-aux/soexpand.py -I$(srcdir) -I$(OVS_SRCDIR) < $< | \
 	  $(PYTHON3) $(srcdir)/build-aux/dpdkstrip.py $(DPDKSTRIP_FLAGS) | \
 	  sed \
 	    -e 's,[@]PKIDIR[@],$(PKIDIR),g' \
@@ -426,7 +428,7 @@ CLEANFILES += flake8-check
 
 include $(srcdir)/manpages.mk
 $(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.py $(OVS_SRCDIR)/python/build/soutil.py
-	@PYTHONPATH=$(OVS_SRCDIR)/python$(psep)$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON3) $(srcdir)/build-aux/sodepends.py -I. -Isrcdir,$(srcdir) -IOVS_MANDIR,$(OVS_MANDIR) $(MAN_ROOTS) >$(@F).tmp
+	@PYTHONPATH=$(OVS_BUILDDIR)/python$(psep)$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON3) $(srcdir)/build-aux/sodepends.py -I. -Isrcdir,$(srcdir) -IOVS_MANDIR,$(OVS_MANDIR) $(MAN_ROOTS) >$(@F).tmp
 	@if cmp -s $(@F).tmp $@; then \
 	  touch $@; \
 	  rm -f $(@F).tmp; \
