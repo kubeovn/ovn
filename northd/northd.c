@@ -16,7 +16,6 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "bitmap.h"
 #include "dirs.h"
@@ -69,7 +68,6 @@ static bool check_lsp_is_up;
  * all locally handled, having just one mac is good enough. */
 static char svc_monitor_mac[ETH_ADDR_STRLEN + 1];
 static struct eth_addr svc_monitor_mac_ea;
-static char svc_ipv4_cidr[20];
 
 /* If this option is 'true' northd will make use of ct.inv match fields.
  * Otherwise, it will avoid using it.  The default is true. */
@@ -6066,18 +6064,8 @@ build_pre_lb(struct ovn_datapath *od, struct hmap *lflows)
      * add a lflow to drop ct.inv packets.
      */
     if (od->has_lb_vip) {
-        if (strlen(svc_ipv4_cidr) != 0) {
-            char *match = xasprintf("ip4 && ip4.dst == %s", svc_ipv4_cidr);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
-                          100, match, REGBIT_CONNTRACK_NAT" = 1; next;");
-            free(match);
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
-                100, "ip6", REGBIT_CONNTRACK_NAT" = 1; next;");
-        } else {
-            ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
-                          100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;");
-        }
-
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB,
+                      100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB,
                       100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;");
     }
@@ -15715,12 +15703,6 @@ ovnnb_db_run(struct northd_input *input_data,
 
     const char *mac_addr_prefix = set_mac_prefix(smap_get(&nb->options,
                                                           "mac_prefix"));
-    const char *svc_ipv4_cidr_o = smap_get(&nb->options, "svc_ipv4_cidr");
-    if (svc_ipv4_cidr_o && strlen(svc_ipv4_cidr_o) != 0) {
-        snprintf(svc_ipv4_cidr, sizeof svc_ipv4_cidr, "%s", svc_ipv4_cidr_o);
-    } else {
-        svc_ipv4_cidr[0] = '\0';
-    }
 
     const char *monitor_mac = smap_get(&nb->options, "svc_monitor_mac");
     if (monitor_mac) {
