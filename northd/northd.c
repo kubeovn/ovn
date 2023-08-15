@@ -9685,7 +9685,15 @@ build_route_match(const struct ovn_port *op_inport, uint32_t rtb_id,
         dir = "dst";
     }
 
-    *priority = (plen * ROUTE_PRIO_OFFSET_MULTIPLIER) + ofs;
+    if (is_src_route) {
+    dir = "src";
+        *priority = 1;
+        if ((is_ipv4 && plen == 32) || (plen == 128)) {
+            *priority = 2;
+        }
+    } else {
+        *priority = (plen * ROUTE_PRIO_OFFSET_MULTIPLIER) + ofs;
+    }
 
     if (op_inport) {
         ds_put_format(match, "inport == %s && ", op_inport->json_key);
