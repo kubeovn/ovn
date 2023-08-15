@@ -3000,10 +3000,6 @@ nbctl_lb_del(struct ctl_context *ctx)
         const char *lb_vip = ctx->argv[2];
         if (smap_get(&lb->vips, lb_vip)) {
             smap_remove(CONST_CAST(struct smap *, &lb->vips), lb_vip);
-            if (smap_is_empty(&lb->vips)) {
-                nbrec_load_balancer_delete(lb);
-                return;
-            }
 
             /* Delete the vip of the load balancer. */
             nbrec_load_balancer_verify_vips(lb);
