@@ -182,7 +182,7 @@ main(int argc, char *argv[])
 static char *
 default_ovs(void)
 {
-    return xasprintf("unix:%s/br-int.mgmt", ovs_rundir());
+    return strdup("tcp:127.0.0.1:6653");
 }
 
 static void
