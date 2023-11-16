@@ -119,7 +119,7 @@ ovn_add_worker_pool(void *(*start)(void *))
         new_pool->size = pool_size;
         new_pool->controls = NULL;
         sprintf(sem_name, MAIN_SEM_NAME, sembase, new_pool);
-        new_pool->done = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
+        new_pool->done = sem_open(sem_name, O_CREAT, 0700, 0);
         if (new_pool->done == SEM_FAILED) {
             goto cleanup;
         }
@@ -135,7 +135,7 @@ ovn_add_worker_pool(void *(*start)(void *))
             ovs_mutex_init(&new_control->mutex);
             new_control->finished = ATOMIC_VAR_INIT(false);
             sprintf(sem_name, WORKER_SEM_NAME, sembase, new_pool, i);
-            new_control->fire = sem_open(sem_name, O_CREAT, S_IRWXU, 0);
+            new_control->fire = sem_open(sem_name, O_CREAT, 0700, 0);
             if (new_control->fire == SEM_FAILED) {
                 goto cleanup;
             }

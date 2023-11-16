@@ -3419,7 +3419,8 @@ encode_put_nd_ra_option(const struct ovnact_gen_option *o,
 
     case ND_OPT_DNSSL:
     {
-        char dnssl[255] = {};
+        char dnssl[255];
+        memset(dnssl, 0, 255);
         int size;
 
         size = encode_ra_dnssl_opt(c->string, dnssl, sizeof(dnssl));

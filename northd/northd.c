@@ -4824,7 +4824,7 @@ lflow_hash_lock_init(void)
  * threads are collected to fix the lflow hmap's size (by the function
  * fix_flow_map_size()).
  * */
-static thread_local size_t thread_lflow_counter = 0;
+DEFINE_STATIC_PER_THREAD_DATA(size_t, thread_lflow_counter, 0);
 
 /* Adds a row with the specified contents to the Logical_Flow table.
  * Version to use when hash bucket locking is NOT required.
@@ -4863,7 +4863,8 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
         hmap_insert(lflow_map, &lflow->hmap_node, hash);
     } else {
         hmap_insert_fast(lflow_map, &lflow->hmap_node, hash);
-        thread_lflow_counter++;
+        size_t *thread_lflow_counter = thread_lflow_counter_get();
+        *thread_lflow_counter += 1;
     }
     return lflow;
 }
@@ -14055,7 +14056,7 @@ build_lflows_thread(void *arg)
         if (stop_parallel_processing()) {
             return NULL;
         }
-        thread_lflow_counter = 0;
+        *thread_lflow_counter_get() = 0;
         if (lsi && workload) {
             /* Iterate over bucket ThreadID, ThreadID+size, ... */
             for (bnum = control->id;
@@ -14118,7 +14119,7 @@ build_lflows_thread(void *arg)
                 }
             }
         }
-        lsi->thread_lflow_counter = thread_lflow_counter;
+        lsi->thread_lflow_counter = *thread_lflow_counter_get();
         post_completed_work(control);
     }
     return NULL;

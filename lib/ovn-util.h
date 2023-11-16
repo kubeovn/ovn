@@ -197,24 +197,19 @@ unsigned int ovn_smap_get_uint(const struct smap *smap, const char *key,
  */
 char *str_tolower(const char *orig);
 
+#ifndef _WIN32
 /* OVN daemon options. Taken from ovs/lib/daemon.h. */
 #define OVN_DAEMON_OPTION_ENUMS                     \
     OVN_OPT_DETACH,                                 \
     OVN_OPT_NO_SELF_CONFINEMENT,                    \
-    OVN_OPT_NO_CHDIR,                               \
-    OVN_OPT_OVERWRITE_PIDFILE,                      \
     OVN_OPT_PIDFILE,                                \
-    OVN_OPT_MONITOR,                                \
     OVN_OPT_USER_GROUP
 
 #define OVN_DAEMON_LONG_OPTIONS                                              \
         {"detach",            no_argument, NULL, OVN_OPT_DETACH},            \
         {"no-self-confinement", no_argument, NULL,                           \
          OVN_OPT_NO_SELF_CONFINEMENT},                                       \
-        {"no-chdir",          no_argument, NULL, OVN_OPT_NO_CHDIR},          \
         {"pidfile",           optional_argument, NULL, OVN_OPT_PIDFILE},     \
-        {"overwrite-pidfile", no_argument, NULL, OVN_OPT_OVERWRITE_PIDFILE}, \
-        {"monitor",           no_argument, NULL, OVN_OPT_MONITOR},           \
         {"user",              required_argument, NULL, OVN_OPT_USER_GROUP}
 
 #define OVN_DAEMON_OPTION_HANDLERS                  \
@@ -226,20 +221,8 @@ char *str_tolower(const char *orig);
             daemon_disable_self_confinement();      \
             break;                                  \
                                                     \
-        case OVN_OPT_NO_CHDIR:                      \
-            set_no_chdir();                         \
-            break;                                  \
-                                                    \
         case OVN_OPT_PIDFILE:                       \
             ovn_set_pidfile(optarg);                \
-            break;                                  \
-                                                    \
-        case OVN_OPT_OVERWRITE_PIDFILE:             \
-            ignore_existing_pidfile();              \
-            break;                                  \
-                                                    \
-        case OVN_OPT_MONITOR:                       \
-            daemon_set_monitor();                   \
             break;                                  \
                                                     \
         case OVN_OPT_USER_GROUP:                    \
@@ -249,11 +232,59 @@ char *str_tolower(const char *orig);
 #define OVN_DAEMON_OPTION_CASES                     \
         case OVN_OPT_DETACH:                        \
         case OVN_OPT_NO_SELF_CONFINEMENT:           \
-        case OVN_OPT_NO_CHDIR:                      \
         case OVN_OPT_PIDFILE:                       \
-        case OVN_OPT_OVERWRITE_PIDFILE:             \
-        case OVN_OPT_MONITOR:                       \
         case OVN_OPT_USER_GROUP:
+#else
+/* OVN daemon options. Taken from ovs/lib/daemon.h. */
+#define OVN_DAEMON_OPTION_ENUMS                     \
+    OVN_OPT_DETACH,                                 \
+    OVN_OPT_NO_SELF_CONFINEMENT,                    \
+    OVN_OPT_PIDFILE,                                \
+    OVN_OPT_SERVICE,                                \
+    OVN_OPT_SERVICE_MONITOR,                        \
+    OVN_OPT_USER_GROUP
+
+#define OVN_DAEMON_LONG_OPTIONS                                              \
+        {"detach",            no_argument, NULL, OVN_OPT_DETACH},            \
+        {"no-self-confinement", no_argument, NULL,                           \
+         OVN_OPT_NO_SELF_CONFINEMENT},                                       \
+        {"pidfile",           optional_argument, NULL, OVN_OPT_PIDFILE},     \
+        {"service",           no_argument, NULL, OVN_OPT_SERVICE},           \
+        {"service-monitor",   no_argument, NULL, OVN_OPT_SERVICE_MONITOR},   \
+        {"user",              required_argument, NULL, OVN_OPT_USER_GROUP}
+
+#define OVN_DAEMON_OPTION_HANDLERS                  \
+        case OVN_OPT_DETACH:                        \
+            set_detach();                           \
+            break;                                  \
+                                                    \
+        case OVN_OPT_NO_SELF_CONFINEMENT:           \
+            daemon_disable_self_confinement();      \
+            break;                                  \
+                                                    \
+        case OVN_OPT_PIDFILE:                       \
+            ovn_set_pidfile(optarg);                \
+            break;                                  \
+                                                    \
+        case OVN_OPT_SERVICE:                       \
+            set_detach();                           \
+            break;                                  \
+                                                    \
+        case OVN_OPT_SERVICE_MONITOR:               \
+            break;                                  \
+                                                    \
+        case OVN_OPT_USER_GROUP:                    \
+            daemon_set_new_user(optarg);            \
+            break;
+
+#define OVN_DAEMON_OPTION_CASES                     \
+        case OVN_OPT_DETACH:                        \
+        case OVN_OPT_NO_SELF_CONFINEMENT:           \
+        case OVN_OPT_PIDFILE:                       \
+        case OVN_OPT_SERVICE:                       \
+        case OVN_OPT_SERVICE_MONITOR:               \
+        case OVN_OPT_USER_GROUP:
+#endif /* _WIN32 */
 
 bool ip_address_and_port_from_lb_key(const char *key, char **ip_address,
                                      uint16_t *port, int *addr_family);
