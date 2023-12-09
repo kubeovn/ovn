@@ -3426,7 +3426,8 @@ encode_put_nd_ra_option(const struct ovnact_gen_option *o,
 
     case ND_OPT_DNSSL:
     {
-        char dnssl[255] = {};
+        char dnssl[255];
+        memset(dnssl, 0, 255);
         int size;
 
         size = encode_ra_dnssl_opt(c->string, dnssl, sizeof(dnssl));
@@ -4918,7 +4919,8 @@ format_COMMIT_LB_AFF(const struct ovnact_commit_lb_aff *lb_aff, struct ds *s)
     bool ipv6 = !IN6_IS_ADDR_V4MAPPED(&lb_aff->vip);
 
     if (ipv6) {
-        char ip_str[INET6_ADDRSTRLEN] = {};
+        char ip_str[INET6_ADDRSTRLEN];
+        memset(ip_str, 0, INET6_ADDRSTRLEN);
         inet_ntop(AF_INET6, &lb_aff->vip, ip_str, INET6_ADDRSTRLEN);
         ds_put_format(s, "commit_lb_aff(vip = \"[%s]", ip_str);
     } else {
@@ -4933,7 +4935,8 @@ format_COMMIT_LB_AFF(const struct ovnact_commit_lb_aff *lb_aff, struct ds *s)
     ds_put_cstr(s, "\"");
 
     if (ipv6) {
-        char ip_str[INET6_ADDRSTRLEN] = {};
+        char ip_str[INET6_ADDRSTRLEN];
+        memset(ip_str, 0, INET6_ADDRSTRLEN);
         inet_ntop(AF_INET6, &lb_aff->backend, ip_str, INET6_ADDRSTRLEN);
         ds_put_format(s, ", backend = \"[%s]", ip_str);
     } else {

@@ -735,7 +735,7 @@ main(int argc, char *argv[])
     int res = EXIT_SUCCESS;
     struct unixctl_server *unixctl;
     int retval;
-    struct ovn_exit_args exit_args = {};
+    struct ovn_exit_args exit_args;
     int n_threads = 1;
     struct northd_state state = {
         .had_lock = false,

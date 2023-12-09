@@ -1071,6 +1071,10 @@ enum sb_engine_node {
     SB_NODES
 #undef SB_NODE
 
+#ifdef interface
+#undef interface
+#endif
+
 #define OVS_NODES \
     OVS_NODE(open_vswitch, "open_vswitch") \
     OVS_NODE(bridge, "bridge") \
@@ -2889,7 +2893,7 @@ struct ed_type_lflow_output {
     /* meter ids for QoS */
     struct ovn_extend_table meter_table;
     /* lflow <-> resource cross reference */
-    struct objdep_mgr lflow_deps_mgr;;
+    struct objdep_mgr lflow_deps_mgr;
     /* load balancer <-> resource cross reference */
     struct objdep_mgr lb_deps_mgr;
     /* conjunciton ID usage information of lflows */
@@ -4060,7 +4064,7 @@ int
 main(int argc, char *argv[])
 {
     struct unixctl_server *unixctl;
-    struct ovn_exit_args exit_args = {};
+    struct ovn_exit_args exit_args;
     int retval;
 
     ovs_cmdl_proctitle_init(argc, argv);

@@ -37,6 +37,8 @@ AM_CPPFLAGS += -I $(top_builddir)/lib
 
 AM_CPPFLAGS += -I $(OVS_SRCDIR)/include
 AM_CPPFLAGS += -I $(OVS_BUILDDIR)/include
+AM_CPPFLAGS += -I $(OVS_BUILDDIR)/include/windows
+AM_CPPFLAGS += -I $(OVS_BUILDDIR)/datapath-windows/include
 AM_CPPFLAGS += -I $(OVS_SRCDIR)/lib
 AM_CPPFLAGS += -I $(OVS_BUILDDIR)/lib
 AM_CPPFLAGS += -I $(OVS_SRCDIR)
@@ -58,7 +60,7 @@ endif
 AM_CTAGSFLAGS = $(OVS_CTAGS_IDENTIFIERS_LIST)
 
 if WIN32
-psep=";"
+psep=":"
 else
 psep=":"
 endif
@@ -162,7 +164,7 @@ noinst_HEADERS += $(EXTRA_DIST)
 
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
 ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-read-only: t -*-\n'
-submodules = $(shell grep 'path =' $(srcdir)/.gitmodules | sed -E 's/[\t ]*path =\s*(.*)/\1/g' | xargs)
+submodules = ovs
 
 SUFFIXES += .in
 .in:
