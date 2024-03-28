@@ -319,6 +319,10 @@ struct ovsrec_bridge_table;
 const struct ovsrec_bridge *get_bridge(const struct ovsrec_bridge_table *,
                                        const char *br_name);
 
+void daemon_started_recently_countdown(void);
+void daemon_started_recently_ignore(void);
+bool daemon_started_recently(void);
+int64_t daemon_startup_ts(void);
 
 /* Utilities around properly handling exit command. */
 struct ovn_exit_args {
