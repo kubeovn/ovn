@@ -5806,6 +5806,10 @@ get_localnet_vifs_l3gwports(
             if (!iface_id) {
                 continue;
             }
+            const char *vendor = smap_get(&iface_rec->external_ids, "vendor");
+            if (vendor && !strcmp(vendor, "kube-ovn")) {
+                continue;
+            }
             const struct sbrec_port_binding *pb
                 = lport_lookup_by_name(sbrec_port_binding_by_name, iface_id);
             if (!pb || pb->chassis != chassis) {
