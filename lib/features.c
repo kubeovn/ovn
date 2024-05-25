@@ -128,7 +128,7 @@ ovs_feature_rconn_setup(const char *br_name)
     }
 
     if (!rconn_is_connected(swconn)) {
-        char *target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), br_name);
+        char *target = strdup("tcp:127.0.0.1:6653");
         if (strcmp(target, rconn_get_target(swconn))) {
             VLOG_INFO("%s: connecting to switch", target);
             rconn_connect(swconn, target, target);

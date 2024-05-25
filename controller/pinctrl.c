@@ -3434,7 +3434,7 @@ pinctrl_rconn_setup(struct rconn *swconn, const char *br_int_name)
     OVS_REQUIRES(pinctrl_mutex)
 {
     if (br_int_name) {
-        char *target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), br_int_name);
+        char *target = strdup("tcp:127.0.0.1:6653");
 
         if (strcmp(target, rconn_get_target(swconn))) {
             VLOG_INFO("%s: connecting to switch", target);
