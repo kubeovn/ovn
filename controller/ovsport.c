@@ -205,6 +205,10 @@ ovsport_lookup_by_interfaces(
     return retval;
 }
 
+#ifdef interface
+#undef interface
+#endif
+
 const struct
 ovsrec_port * ovsport_lookup_by_interface(
         struct ovsdb_idl_index *ovsrec_port_by_interfaces,

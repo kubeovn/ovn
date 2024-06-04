@@ -37,6 +37,8 @@ AM_CPPFLAGS += -I $(top_builddir)/lib
 
 AM_CPPFLAGS += -I $(OVS_SRCDIR)/include
 AM_CPPFLAGS += -I $(OVS_BUILDDIR)/include
+AM_CPPFLAGS += -I $(OVS_BUILDDIR)/include/windows
+AM_CPPFLAGS += -I $(OVS_BUILDDIR)/datapath-windows/include
 AM_CPPFLAGS += -I $(OVS_SRCDIR)/lib
 AM_CPPFLAGS += -I $(OVS_BUILDDIR)/lib
 AM_CPPFLAGS += -I $(OVS_SRCDIR)
@@ -58,7 +60,7 @@ endif
 AM_CTAGSFLAGS = $(OVS_CTAGS_IDENTIFIERS_LIST)
 
 if WIN32
-psep=";"
+psep=":"
 else
 psep=":"
 endif
@@ -169,7 +171,7 @@ noinst_HEADERS += $(EXTRA_DIST)
 
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
 ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-read-only: t -*-\n'
-submodules = $(shell grep 'path =' $(srcdir)/.gitmodules | sed -E 's/[\t ]*path =\s*(.*)/\1/g' | xargs)
+submodules = ovs
 
 SUFFIXES += .in
 .in:
@@ -224,7 +226,6 @@ CLEAN_LOCAL += clean-pycov
 
 # If we're checked out from a Git repository, make sure that every
 # file that is in Git is distributed.
-ALL_LOCAL += dist-hook-git
 dist-hook-git: distfiles
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1; then \
 	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' | \
@@ -488,8 +489,6 @@ include automake.mk
 include Documentation/automake.mk
 include m4/automake.mk
 include lib/automake.mk
-include utilities/automake.mk
-include tests/automake.mk
 include include/automake.mk
 include debian/automake.mk
 include lib/ovsdb_automake.mk
@@ -497,6 +496,4 @@ include rhel/automake.mk
 include tutorial/automake.mk
 include controller/automake.mk
 include controller-vtep/automake.mk
-include northd/automake.mk
-include ic/automake.mk
 include build-aux/automake.mk
