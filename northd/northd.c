@@ -11292,8 +11292,20 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     }
 
     if (ctx->lb_vip->n_backends || !ctx->lb_vip->empty_backend_rej) {
-        ds_put_format(ctx->new_match, " && is_chassis_resident(%s)",
-                      od->l3dgw_ports[0]->cr_port->json_key);
+        if (od->n_l3dgw_ports > 1) {
+            for (size_t i = 0; i < od->n_l3dgw_ports; i++) {
+                const char *vip = ctx->lb_vip->vip_str;
+                if (find_lrp_member_ip(od->l3dgw_ports[i], vip)) {
+                    ds_put_format(ctx->new_match,
+                                  " && is_chassis_resident(%s)",
+                                  od->l3dgw_ports[i]->cr_port->json_key);
+                    break;
+                }
+            }
+        } else {
+            ds_put_format(ctx->new_match, " && is_chassis_resident(%s)",
+                          od->l3dgw_ports[0]->cr_port->json_key);
+        }
     }
 
     ovn_lflow_add_with_hint__(ctx->lflows, od, S_ROUTER_IN_DNAT, ctx->prio,
