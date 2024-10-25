@@ -92,6 +92,10 @@ static bool default_acl_drop;
 
 static bool bcast_arp_req_flood = true;
 
+static bool compatible_21_06 = false;
+static bool compatible_22_03 = false;
+static bool compatible_22_12 = false;
+
 #define MAX_OVN_TAGS 4096
 
 
@@ -5719,8 +5723,11 @@ build_lswitch_port_sec_op(struct ovn_port *op, struct lflow_table *lflows,
                                           op->key, &op->nbsp->header_,
                                           op->lflow_ref);
     } else if (queue_id) {
-        ds_put_cstr(actions,
-                    REGBIT_PORT_SEC_DROP" = check_in_port_sec(); next;");
+        ds_put_format(actions,
+                      "%snext;",
+                      !compatible_22_03 ?
+                      REGBIT_PORT_SEC_DROP" = check_in_port_sec(); " :
+                      "");
         ovn_lflow_add_with_lport_and_hint(lflows, op->od,
                                           S_SWITCH_IN_CHECK_PORT_SEC, 70,
                                           ds_cstr(match), ds_cstr(actions),
@@ -5775,7 +5782,7 @@ build_lswitch_learn_fdb_op(
         ds_clear(match);
         ds_clear(actions);
         ds_put_format(match, "inport == %s", op->json_key);
-        if (lsp_is_localnet(op->nbsp)) {
+        if (lsp_is_localnet(op->nbsp) && !compatible_22_03) {
             ds_put_cstr(actions, "flags.localnet = 1; ");
         }
         ds_put_format(actions, REGBIT_LKUP_FDB
@@ -5823,8 +5830,10 @@ build_lswitch_output_port_sec_od(struct ovn_datapath *od,
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_CHECK_PORT_SEC, 100,
                   "eth.mcast", REGBIT_PORT_SEC_DROP" = 0; next;",
                   lflow_ref);
+    const char *action = compatible_22_03 ? "next;" :
+                         REGBIT_PORT_SEC_DROP " = check_out_port_sec(); next;";
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_CHECK_PORT_SEC, 0, "1",
-                  REGBIT_PORT_SEC_DROP" = check_out_port_sec(); next;",
+                  action,
                   lflow_ref);
 
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_APPLY_PORT_SEC, 50,
@@ -6762,7 +6771,7 @@ build_acl_log_related_flows(const struct ovn_datapath *od,
                                    : "ct_label.blocked";
     bool ingress = !strcmp(acl->direction, "from-lport") ? true :false;
     bool log_related = smap_get_bool(&acl->options, "log-related",
-                                     false);
+                                     false) && !compatible_21_06;
 
     if (!strcmp(acl->action, "allow-stateless") || !has_stateful) {
         /* Not stateful */
@@ -7728,9 +7737,14 @@ build_stateful(struct ovn_datapath *od,
      * We always set ct_mark.blocked to 0 here as
      * any packet that makes it this far is part of a connection we
      * want to allow to continue. */
-    ds_put_format(&actions, "ct_commit { %s = 0; "
-                            "ct_label.label = " REG_LABEL "; }; next;",
-                  ct_block_action);
+    if (!compatible_21_06) {
+        ds_put_format(&actions, "ct_commit { %s = 0; "
+                                "ct_label.label = " REG_LABEL "; }; next;",
+                      ct_block_action);
+    } else {
+        ds_put_format(&actions, "ct_commit { %s = 0; }; next;",
+                      ct_block_action);
+    }
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
                   REGBIT_CONNTRACK_COMMIT" == 1 && "
                   REGBIT_ACL_LABEL" == 1",
@@ -8086,8 +8100,11 @@ build_lswitch_rport_arp_req_self_orig_flow(struct ovn_port *op,
     ds_put_cstr(&eth_src, "}");
 
     ds_put_format(&match,
-                  "eth.src == %s && (arp.op == 1 || rarp.op == 3 || nd_ns)",
-                  ds_cstr(&eth_src));
+                  "eth.src == %s && (arp.op == 1 || %snd_ns)",
+                  ds_cstr(&eth_src),
+                  !compatible_22_03 ?
+                  "rarp.op == 3 || " :
+                  "");
     ovn_lflow_add(lflows, od, S_SWITCH_IN_L2_LKUP, priority, ds_cstr(&match),
                   "outport = \""MC_FLOOD_L2"\"; output;", lflow_ref);
 
@@ -8684,11 +8701,13 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
 {
     ovs_assert(od->nbs);
 
-    /* Default action for recirculated ICMP error 'packet too big'. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 110,
-                  "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
-                  " (ip6 && icmp6.type == 2 && icmp6.code == 0)) &&"
-                  " flags.tunnel_rx == 1", debug_drop_action(), lflow_ref);
+    if (!compatible_22_12) {
+        /* Default action for recirculated ICMP error 'packet too big'. */
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 110,
+                      "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
+                      " (ip6 && icmp6.type == 2 && icmp6.code == 0)) &&"
+                      " flags.tunnel_rx == 1", debug_drop_action(), lflow_ref);
+    }
 
     /* Logical VLANs not supported. */
     if (!is_vlan_transparent(od)) {
@@ -8703,8 +8722,10 @@ build_lswitch_lflows_admission_control(struct ovn_datapath *od,
                   "eth.src[40]", debug_drop_action(),
                   lflow_ref);
 
+    const char *action = compatible_22_03 ? "next;" :
+                         REGBIT_PORT_SEC_DROP " = check_in_port_sec(); next;";
     ovn_lflow_add(lflows, od, S_SWITCH_IN_CHECK_PORT_SEC, 50, "1",
-                  REGBIT_PORT_SEC_DROP" = check_in_port_sec(); next;",
+                  action,
                   lflow_ref);
 
     ovn_lflow_add(lflows, od, S_SWITCH_IN_APPLY_PORT_SEC, 50,
@@ -11899,6 +11920,10 @@ build_lrouter_icmp_packet_toobig_admin_flows(
 {
     ovs_assert(op->nbrp);
 
+    if (compatible_22_12) {
+        return;
+    }
+
     if (!is_l3dgw_port(op)) {
         return;
     }
@@ -11923,6 +11948,10 @@ build_lswitch_icmp_packet_toobig_admin_flows(
         struct ds *match, struct ds *actions)
 {
     ovs_assert(op->nbsp);
+
+    if (compatible_22_12) {
+        return;
+    }
 
     if (!lsp_is_router(op->nbsp)) {
         return;
@@ -12098,11 +12127,13 @@ build_adm_ctrl_flows_for_lrouter(
 {
     ovs_assert(od->nbr);
 
-    /* Default action for recirculated ICMP error 'packet too big'. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_ADMISSION, 110,
-                  "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
-                  " (ip6 && icmp6.type == 2 && icmp6.code == 0)) &&"
-                  " flags.tunnel_rx == 1", debug_drop_action(), lflow_ref);
+    if (!compatible_22_12) {
+        /* Default action for recirculated ICMP error 'packet too big'. */
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_ADMISSION, 110,
+                      "((ip4 && icmp4.type == 3 && icmp4.code == 4) ||"
+                      " (ip6 && icmp6.type == 2 && icmp6.code == 0)) &&"
+                      " flags.tunnel_rx == 1", debug_drop_action(), lflow_ref);
+    }
 
     /* Logical VLANs not supported.
      * Broadcast/multicast source address is invalid. */
@@ -12365,8 +12396,11 @@ build_neigh_learning_flows_for_lrouter(
     ds_put_format(match, REGBIT_LOOKUP_NEIGHBOR_RESULT" == 1%s",
                   learn_from_arp_request ? "" :
                   " || "REGBIT_LOOKUP_NEIGHBOR_IP_RESULT" == 0");
+    ds_clear(actions);
+    ds_put_format(actions, "%snext;",
+                  !compatible_22_12 ? "mac_cache_use; " : "");
     ovn_lflow_add(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 100,
-                  ds_cstr(match), "mac_cache_use; next;",
+                  ds_cstr(match), ds_cstr(actions),
                   lflow_ref);
 
     ovn_lflow_metered(lflows, od, S_ROUTER_IN_LEARN_NEIGHBOR, 90,
@@ -17413,6 +17447,20 @@ ovnnb_db_run(struct northd_input *input_data,
                                               false);
     use_common_zone = smap_get_bool(input_data->nb_options, "use_common_zone",
                                     false);
+
+    const char *s = smap_get_def(input_data->nb_options,
+                                 "version_compatibility", "");
+    int major, minor;
+    int n = sscanf(s, "%2d.%2d", &major, &minor);
+    if (n == 2) {
+        compatible_21_06 = (major < 21 || (major == 21 && minor <= 6));
+        compatible_22_03 = (major < 22 || (major == 22 && minor <= 3));
+        compatible_22_12 = (major < 22 || (major == 22 && minor <= 12));
+    } else {
+        compatible_21_06 = false;
+        compatible_22_03 = false;
+        compatible_22_12 = false;
+    }
 
     build_datapaths(ovnsb_txn,
                     input_data->nbrec_logical_switch_table,
