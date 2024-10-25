@@ -22,6 +22,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/utsname.h>
 
 #include "bfd.h"
 #include "binding.h"
@@ -82,6 +83,8 @@
 #include "mirror.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
+
+bool lflow_kube_ovn_skip_ct = false;
 
 static unixctl_cb_func ct_zone_list;
 static unixctl_cb_func extend_table_list;
@@ -4092,6 +4095,25 @@ main(int argc, char *argv[])
     char *ovs_remote = parse_options(argc, argv);
     fatal_ignore_sigpipe();
 
+    errno = 0;
+    struct utsname info;
+    if (uname(&info)) {
+        perror("could not get kernel information");
+        exit(EXIT_FAILURE);
+    }
+
+    if (!strstr(info.release, "el8")) {
+        lflow_kube_ovn_skip_ct = true;
+    } else {
+        int kernel, major, minor, patch;
+        int n = sscanf(info.release, "%d.%d.%d-%d",
+                       &kernel, &major, &minor, &patch);
+        // RHEL 8.6 with kernel version 4.18.0-372 is not supported
+        if (n != 4 || kernel != 4 || major != 18 || minor != 0 || patch != 372) {
+            lflow_kube_ovn_skip_ct = true;
+        }
+    }
+
     daemonize_start(true);
 
     char *abs_unixctl_path = get_abs_unix_ctl_path(NULL);
@@ -4104,6 +4126,9 @@ main(int argc, char *argv[])
                              &exit_args);
 
     daemonize_complete();
+
+    VLOG_INFO("kernel version is %s", info.release);
+    VLOG_INFO("lflow_kube_ovn_skip_ct is %s supported", lflow_kube_ovn_skip_ct ? "" : "not ");
 
     /* Register ofctrl seqno types. */
     ofctrl_seq_type_nb_cfg = ofctrl_seqno_add_type();
@@ -4201,7 +4226,6 @@ main(int argc, char *argv[])
      * */
 
     ovsdb_idl_omit(ovnsb_idl_loop.idl, &sbrec_sb_global_col_external_ids);
-    ovsdb_idl_omit(ovnsb_idl_loop.idl, &sbrec_logical_flow_col_external_ids);
     ovsdb_idl_omit(ovnsb_idl_loop.idl, &sbrec_port_binding_col_external_ids);
     ovsdb_idl_omit(ovnsb_idl_loop.idl, &sbrec_ssl_col_external_ids);
     ovsdb_idl_omit(ovnsb_idl_loop.idl,

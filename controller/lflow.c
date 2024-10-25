@@ -33,6 +33,7 @@
 #include "lib/lb.h"
 #include "lib/ovn-l7.h"
 #include "lib/ovn-sb-idl.h"
+#include "lib/ovn-util.h"
 #include "lib/extend-table.h"
 #include "lib/uuidset.h"
 #include "packets.h"
@@ -1076,6 +1077,16 @@ consider_logical_flow__(const struct sbrec_logical_flow *lflow,
         VLOG_DBG("Skip lflow "UUID_FMT" for non-local datapath %"PRId64,
                  UUID_ARGS(&lflow->header_.uuid), dp->tunnel_key);
         return;
+    }
+
+    if (!lflow_kube_ovn_skip_ct) {
+        const char *hint = smap_get(&lflow->external_ids, "kube-ovn-hint");
+        if (hint && !strcmp(hint, OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT)) {
+            VLOG_DBG("lflow "UUID_FMT
+                      " is not compatible with current kernel version, skip",
+                      UUID_ARGS(&lflow->header_.uuid));
+            return;
+        }
     }
 
     const char *io_port = smap_get(&lflow->tags, "in_out_port");

@@ -45,4 +45,6 @@ const struct ovsrec_bridge *get_bridge(const struct ovsrec_bridge_table *,
 
 uint32_t get_tunnel_type(const char *name);
 
+extern bool lflow_kube_ovn_skip_ct;
+
 #endif /* controller/ovn-controller.h */

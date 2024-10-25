@@ -88,6 +88,8 @@ static bool ls_dnat_mod_dl_dst = false;
 
 static bool bcast_arp_req_flood = true;
 
+static bool ls_ct_skip_dst_lport_ips = false;
+
 #define MAX_OVN_TAGS 4096
 
 /* Pipeline stages. */
@@ -5053,6 +5055,7 @@ struct ovn_lflow {
     char *actions;
     char *io_port;
     char *stage_hint;
+    char *kube_ovn_hint;
     char *ctrl_meter;
     struct ovn_dp_group *dpg;    /* Link to unique Sb datapath group. */
     const char *where;
@@ -5099,7 +5102,7 @@ static void
 ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
                enum ovn_stage stage, uint16_t priority,
                char *match, char *actions, char *io_port, char *ctrl_meter,
-               char *stage_hint, const char *where)
+               char *stage_hint, char *kube_ovn_hint, const char *where)
 {
     lflow->dpg_bitmap = bitmap_allocate(n_datapaths);
     lflow->od = od;
@@ -5109,6 +5112,7 @@ ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
     lflow->actions = actions;
     lflow->io_port = io_port;
     lflow->stage_hint = stage_hint;
+    lflow->kube_ovn_hint = kube_ovn_hint;
     lflow->ctrl_meter = ctrl_meter;
     lflow->dpg = NULL;
     lflow->where = where;
@@ -5195,6 +5199,7 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
                  uint32_t hash, enum ovn_stage stage, uint16_t priority,
                  const char *match, const char *actions, const char *io_port,
                  const struct ovsdb_idl_row *stage_hint,
+                 const char* kube_ovn_hint,
                  const char *where, const char *ctrl_meter)
 {
 
@@ -5216,7 +5221,9 @@ do_ovn_lflow_add(struct hmap *lflow_map, struct ovn_datapath *od,
                    xstrdup(match), xstrdup(actions),
                    io_port ? xstrdup(io_port) : NULL,
                    nullable_xstrdup(ctrl_meter),
-                   ovn_lflow_hint(stage_hint), where);
+                   ovn_lflow_hint(stage_hint),
+                   kube_ovn_hint ? xstrdup(kube_ovn_hint) : NULL,
+                   where);
     bitmap_set1(lflow->dpg_bitmap, od->index);
     if (parallelization_state != STATE_USE_PARALLELIZATION) {
         hmap_insert(lflow_map, &lflow->hmap_node, hash);
@@ -5236,6 +5243,7 @@ do_ovn_lflow_add_pd(struct hmap *lflow_map, struct ovn_datapath *od,
                     const char *match, const char *actions,
                     const char *io_port,
                     const struct ovsdb_idl_row *stage_hint,
+                    const char *kube_ovn_hint,
                     const char *where, const char *ctrl_meter)
 {
 
@@ -5245,7 +5253,8 @@ do_ovn_lflow_add_pd(struct hmap *lflow_map, struct ovn_datapath *od,
 
     ovs_mutex_lock(hash_lock);
     lflow = do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
-                             actions, io_port, stage_hint, where, ctrl_meter);
+                             actions, io_port, stage_hint, kube_ovn_hint,
+                             where, ctrl_meter);
     ovs_mutex_unlock(hash_lock);
     return lflow;
 }
@@ -5263,11 +5272,12 @@ ovn_lflow_add_at_with_hash(struct hmap *lflow_map, struct ovn_datapath *od,
     ovs_assert(ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
     if (parallelization_state == STATE_USE_PARALLELIZATION) {
         lflow = do_ovn_lflow_add_pd(lflow_map, od, hash, stage, priority,
-                                    match, actions, io_port, stage_hint, where,
-                                    ctrl_meter);
+                                    match, actions, io_port, stage_hint, NULL,
+                                    where, ctrl_meter);
     } else {
         lflow = do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
-                         actions, io_port, stage_hint, where, ctrl_meter);
+                                 actions, io_port, stage_hint, NULL,
+                                 where, ctrl_meter);
     }
     return lflow;
 }
@@ -5288,6 +5298,36 @@ ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
                                  actions);
     ovn_lflow_add_at_with_hash(lflow_map, od, stage, priority, match, actions,
                                io_port, ctrl_meter, stage_hint, where, hash);
+}
+
+static struct ovn_lflow *
+ovn_lflow_add_at_with_kube_ovn_hint(struct hmap *lflow_map,
+                                    struct ovn_datapath *od,
+                                    enum ovn_stage stage, uint16_t priority,
+                                    const char *match, const char *actions,
+                                    const char *io_port,
+                                    const char *ctrl_meter,
+                                    const char *kube_ovn_hint,
+                                    const char *where)
+{
+    uint32_t hash;
+    hash = ovn_logical_flow_hash(ovn_stage_get_table(stage),
+                                 ovn_stage_get_pipeline(stage),
+                                 priority, match,
+                                 actions);
+
+    struct ovn_lflow *lflow;
+    ovs_assert(ovn_stage_to_datapath_type(stage) == ovn_datapath_get_type(od));
+    if (parallelization_state == STATE_USE_PARALLELIZATION) {
+        lflow = do_ovn_lflow_add_pd(lflow_map, od, hash, stage, priority,
+                                    match, actions, io_port, NULL,
+                                    kube_ovn_hint, where, ctrl_meter);
+    } else {
+        lflow = do_ovn_lflow_add(lflow_map, od, hash, stage, priority, match,
+                                 actions, io_port, NULL, kube_ovn_hint,
+                                 where, ctrl_meter);
+    }
+    return lflow;
 }
 
 static void
@@ -5311,6 +5351,12 @@ __ovn_lflow_add_default_drop(struct hmap *lflow_map,
                                 ACTIONS, STAGE_HINT) \
     ovn_lflow_add_at(LFLOW_MAP, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
                      NULL, NULL, STAGE_HINT, OVS_SOURCE_LOCATOR)
+
+#define ovn_lflow_add_with_kube_ovn_hint(LFLOW_MAP, OD, STAGE, PRIORITY, \
+                                         MATCH, ACTIONS, KUBE_OVN_HINT) \
+    ovn_lflow_add_at_with_kube_ovn_hint(LFLOW_MAP, OD, STAGE, PRIORITY, \
+                                        MATCH, ACTIONS, NULL, NULL, \
+                                        KUBE_OVN_HINT, OVS_SOURCE_LOCATOR)
 
 #define ovn_lflow_add_default_drop(LFLOW_MAP, OD, STAGE)                    \
     __ovn_lflow_add_default_drop(LFLOW_MAP, OD, STAGE, OVS_SOURCE_LOCATOR)
@@ -5372,6 +5418,9 @@ ovn_lflow_destroy(struct hmap *lflows, struct ovn_lflow *lflow)
         free(lflow->actions);
         free(lflow->io_port);
         free(lflow->stage_hint);
+        if (lflow->kube_ovn_hint) {
+            free(lflow->kube_ovn_hint);
+        }
         free(lflow->ctrl_meter);
         free(lflow);
     }
@@ -6124,6 +6173,110 @@ build_pre_lb(struct ovn_datapath *od, const struct shash *meter_groups,
                       100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;");
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB,
                       100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;");
+
+        if (!ls_ct_skip_dst_lport_ips) {
+            return;
+        }
+
+        if (!od->nbs) {
+            return;
+        }
+        if (od->n_router_ports != 1 && od->n_localnet_ports == 0) {
+            return;
+        }
+
+        ovs_be32 lla_ip4;
+        inet_pton(AF_INET, "169.254.0.0", &lla_ip4);
+        char *match = NULL;
+        struct ovn_port *op;
+
+        if (od->n_router_ports == 1) {
+            struct ovn_port *peer = od->router_ports[0]->peer;
+            if (!peer || !peer->nbrp) {
+                return;
+            }
+
+            LIST_FOR_EACH (op, dp_node, &peer->od->port_list) {
+                for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+                    struct ipv4_netaddr *addrs;
+                    addrs = &op->lrp_networks.ipv4_addrs[i];
+                    if (addrs->plen >= 16 &&
+                        (addrs->addr & htonl(0xffff0000)) == lla_ip4) {
+                        // skip link local address
+                        continue;
+                    }
+                    match = xasprintf("ip4 && ip4.dst == %s/%u",
+                                    addrs->network_s, addrs->plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+                    free(match);
+                }
+
+                for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+                    struct ipv6_netaddr *addrs;
+                    addrs = &op->lrp_networks.ipv6_addrs[i];
+                    if (addrs->plen >= 10 &&
+                        (addrs->addr.s6_addr[0] & 0xff) == 0xfe &&
+                        (addrs->addr.s6_addr[1] & 0xc0) == 0x80) {
+                        // skip link local address
+                        continue;
+                    }
+                    match = xasprintf("ip6 && ip6.dst == %s/%u",
+                                    addrs->network_s, addrs->plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+                    free(match);
+                }
+            }
+
+            return;
+        }
+
+        ovs_be32 ipv4;
+        struct in6_addr ipv6;
+        unsigned int plen;
+        char *error;
+        char buf[INET6_ADDRSTRLEN];
+
+        for (size_t i = 0; i < od->n_localnet_ports; i++) {
+            op = od->localnet_ports[i];
+            const char *ipv4_network = smap_get(&op->nbsp->external_ids,
+                                                "ipv4_network");
+            const char *ipv6_network = smap_get(&op->nbsp->external_ids,
+                                                "ipv6_network");
+            if (ipv4_network) {
+                error = ip_parse_cidr(ipv4_network, &ipv4, &plen);
+                if (error) {
+                    free(error);
+                    continue;
+                }
+                if (plen && plen != 32) {
+                    match = xasprintf("ip4 && ip4.dst == "IP_FMT"/%u",
+                                      IP_ARGS(ipv4), plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+                    free(match);
+                }
+            }
+            if (ipv6_network) {
+                error = ipv6_parse_cidr(ipv6_network, &ipv6, &plen);
+                if (error) {
+                    free(error);
+                    continue;
+                }
+                if (plen && plen != 128) {
+                    inet_ntop(AF_INET6, &ipv6, buf, sizeof buf);
+                    match = xasprintf("ip6 && ip6.dst == %s/%u", buf, plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+                    free(match);
+                }
+            }
+        }
     }
 }
 
@@ -15433,6 +15586,8 @@ void build_lflows(struct lflow_input *input_data,
                                                   "stage-name", "");
                 const char *stage_hint = smap_get_def(&sbflow->external_ids,
                                                   "stage-hint", "");
+                const char *kube_ovn_hint = smap_get_def(&sbflow->external_ids,
+                                                         "kube-ovn-hint", "");
                 const char *source = smap_get_def(&sbflow->external_ids,
                                                   "source", "");
 
@@ -15444,6 +15599,12 @@ void build_lflows(struct lflow_input *input_data,
                     if (strcmp(stage_hint, lflow->stage_hint)) {
                         sbrec_logical_flow_update_external_ids_setkey(sbflow,
                         "stage-hint", lflow->stage_hint);
+                    }
+                }
+                if (lflow->kube_ovn_hint) {
+                    if (strcmp(kube_ovn_hint, lflow->kube_ovn_hint)) {
+                        sbrec_logical_flow_update_external_ids_setkey(sbflow,
+                        "kube-ovn-hint", lflow->kube_ovn_hint);
                     }
                 }
                 if (lflow->where) {
@@ -15548,6 +15709,9 @@ void build_lflows(struct lflow_input *input_data,
         smap_add(&ids, "source", where);
         if (lflow->stage_hint) {
             smap_add(&ids, "stage-hint", lflow->stage_hint);
+        }
+        if (lflow->kube_ovn_hint) {
+            smap_add(&ids, "kube-ovn-hint", lflow->kube_ovn_hint);
         }
         sbrec_logical_flow_set_external_ids(sbflow, &ids);
         smap_destroy(&ids);
@@ -16573,6 +16737,9 @@ ovnnb_db_run(struct northd_input *input_data,
                                               false);
     ls_dnat_mod_dl_dst = smap_get_bool(&nb->options,
                                        "ls_dnat_mod_dl_dst", false);
+    ls_ct_skip_dst_lport_ips = smap_get_bool(&nb->options,
+                                             "ls_ct_skip_dst_lport_ips",
+                                             false);
 
     build_chassis_features(input_data, &data->features);
 
