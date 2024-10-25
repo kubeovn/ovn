@@ -90,6 +90,9 @@ static bool bcast_arp_req_flood = true;
 
 static bool ls_ct_skip_dst_lport_ips = false;
 
+static char node_local_dns_ip_v4[INET_ADDRSTRLEN];
+static char node_local_dns_ip_v6[INET6_ADDRSTRLEN];
+
 static bool compatible_21_06 = false;
 static bool compatible_22_03 = false;
 
@@ -6199,6 +6202,23 @@ build_pre_lb(struct ovn_datapath *od, const struct shash *meter_groups,
         inet_pton(AF_INET, "169.254.0.0", &lla_ip4);
         char *match = NULL;
         struct ovn_port *op;
+
+        // skip conntrack when access node local dns ip
+        if (strlen(node_local_dns_ip_v4) != 0) {
+            match = xasprintf("ip4 && ip4.dst == %s/32", node_local_dns_ip_v4);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+            free(match);
+        }
+
+        if (strlen(node_local_dns_ip_v6) != 0) {
+            match = xasprintf("ip6 && ip6.dst == %s/128", node_local_dns_ip_v6);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+            free(match);
+        }
 
         if (od->n_router_ports == 1) {
             struct ovn_port *peer = od->router_ports[0]->peer;
@@ -16721,6 +16741,23 @@ ovnnb_db_run(struct northd_input *input_data,
         snprintf(svc_monitor_mac, sizeof svc_monitor_mac,
                  ETH_ADDR_FMT, ETH_ADDR_ARGS(svc_monitor_mac_ea));
         smap_replace(&options, "svc_monitor_mac", svc_monitor_mac);
+    }
+
+    const char *local_dns_ip = smap_get(&nb->options, "node_local_dns_ip");
+    memset(node_local_dns_ip_v4, 0, sizeof(node_local_dns_ip_v4));
+    memset(node_local_dns_ip_v6, 0, sizeof(node_local_dns_ip_v6));
+    if (local_dns_ip) {
+        if (strchr(local_dns_ip, '.')) {
+            ovs_be32 ip4;
+            if (ip_parse(local_dns_ip, &ip4)) {
+                strcpy(node_local_dns_ip_v4, local_dns_ip);
+            }
+        } else {
+            struct in6_addr ip6;
+            if (ipv6_parse(local_dns_ip, &ip6)) {
+                strcpy(node_local_dns_ip_v6, local_dns_ip);
+            }
+        }
     }
 
     char *max_tunid = xasprintf("%d", get_ovn_max_dp_key_local(input_data));
