@@ -101,6 +101,8 @@ static bool compatible_22_12 = false;
 
 static bool ls_ct_skip_dst_lport_ips = false;
 
+static bool ls_dnat_mod_dl_dst = false;
+
 #define MAX_OVN_TAGS 4096
 
 
@@ -7837,6 +7839,135 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
 }
 
 static void
+build_lswitch_dnat_mod_dl_dst_rules(struct ovn_port *op,
+                                    struct lflow_table *lflows,
+                                    const struct hmap *lr_ports,
+                                    struct ds *actions,
+                                    struct ds *match)
+{
+    if (!ls_dnat_mod_dl_dst) {
+        return;
+    }
+    if (!op->nbsp) {
+        return;
+    }
+    if (!strcmp(op->nbsp->type, "virtual") ||
+        !strcmp(op->nbsp->type, "localport")) {
+        return;
+    }
+    if (lsp_is_external(op->nbsp) || op->has_unknown) {
+        return;
+    }
+
+    if (lsp_is_router(op->nbsp)) {
+        struct ovn_port *peer = ovn_port_get_peer(lr_ports, op);
+        if (!peer || !peer->nbrp) {
+            return;
+        }
+
+        char *network_s = NULL, *joined_networks = NULL;
+        struct svec networks;
+        svec_init(&networks);
+
+        if (peer->lrp_networks.n_ipv4_addrs) {
+            ovs_be32 lla;
+            inet_pton(AF_INET, "169.254.0.0", &lla);
+
+            for (int i = 0; i < peer->lrp_networks.n_ipv4_addrs; i++) {
+                struct ipv4_netaddr *addrs = &peer->lrp_networks.ipv4_addrs[i];
+                if (addrs->plen >= 16 &&
+                    (addrs->addr & htonl(0xffff0000)) == lla) {
+                    // skip link local address
+                    continue;
+                }
+
+                network_s = xasprintf("%s/%u", addrs->network_s, addrs->plen);
+                svec_add(&networks, network_s);
+                free(network_s);
+            }
+
+            ds_clear(match);
+            if (svec_is_empty(&networks)) {
+                ds_put_format(match, "ip4");
+            } else {
+                joined_networks = svec_join(&networks, ", ", "");
+                svec_clear(&networks);
+                ds_put_format(match, "ip4.dst != {%s}", joined_networks);
+                free(joined_networks);
+            }
+
+            ds_clear(actions);
+            ds_put_format(actions, "next;");
+            ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_AFTER_LB, 60,
+                                    ds_cstr(match), ds_cstr(actions),
+                                    &op->nbsp->header_, op->lflow_ref);
+        }
+
+        if (peer->lrp_networks.n_ipv6_addrs) {
+            for (int i = 0; i < peer->lrp_networks.n_ipv6_addrs; i++) {
+                struct ipv6_netaddr *addrs = &peer->lrp_networks.ipv6_addrs[i];
+                if (addrs->plen >= 10 &&
+                    (addrs->addr.s6_addr[0] & 0xff) == 0xfe &&
+                    (addrs->addr.s6_addr[1] & 0xc0) == 0x80) {
+                    // skip link local address
+                    continue;
+                }
+
+                network_s = xasprintf("%s/%u", addrs->network_s, addrs->plen);
+                svec_add(&networks, network_s);
+                free(network_s);
+            }
+
+            ds_clear(match);
+            if (svec_is_empty(&networks)) {
+                ds_put_format(match, "ip6");
+            } else {
+                joined_networks = svec_join(&networks, ", ", "");
+                svec_clear(&networks);
+                ds_put_format(match, "ip6.dst != {%s}", joined_networks);
+                free(joined_networks);
+            }
+
+            ds_clear(actions);
+            ds_put_format(actions, "next;");
+            ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_AFTER_LB, 60,
+                                    ds_cstr(match), ds_cstr(actions),
+                                    &op->nbsp->header_, op->lflow_ref);
+        }
+
+        svec_destroy(&networks);
+        return;
+    }
+
+    if (op->n_lsp_addrs != 1 || !strlen(op->lsp_addrs[0].ea_s) ||
+        (!op->lsp_addrs[0].n_ipv4_addrs && !op->lsp_addrs[0].n_ipv6_addrs)) {
+        return;
+    }
+
+    for (size_t i = 0; i < op->lsp_addrs[0].n_ipv4_addrs; i++) {
+        ds_clear(match);
+        ds_put_format(match, "ip4.dst == %s",
+                      op->lsp_addrs[0].ipv4_addrs[i].addr_s);
+        ds_clear(actions);
+        ds_put_format(actions, "eth.dst = %s; next;", op->lsp_addrs[0].ea_s);
+        ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_AFTER_LB, 50,
+                                ds_cstr(match), ds_cstr(actions),
+                                &op->nbsp->header_, op->lflow_ref);
+    }
+
+    for (size_t i = 0; i < op->lsp_addrs[0].n_ipv6_addrs; i++) {
+        ds_clear(match);
+        ds_put_format(match, "ip6.dst == %s",
+                        op->lsp_addrs[0].ipv6_addrs[i].addr_s);
+        ds_clear(actions);
+        ds_put_format(actions, "eth.dst = %s; next;", op->lsp_addrs[0].ea_s);
+        ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_AFTER_LB, 50,
+                                ds_cstr(match), ds_cstr(actions),
+                                &op->nbsp->header_, op->lflow_ref);
+    }
+}
+
+static void
 build_stateful(struct ovn_datapath *od,
                const struct chassis_features *features,
                struct lflow_table *lflows,
@@ -7850,6 +7981,12 @@ build_stateful(struct ovn_datapath *od,
     /* Ingress LB, Ingress and Egress stateful Table (Priority 0): Packets are
      * allowed by default. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, 0, "1", "next;", lflow_ref);
+    if (ls_dnat_mod_dl_dst) {
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_AFTER_LB, 100,
+                      REGBIT_CONNTRACK_NAT" == 0",  "next;", lflow_ref);
+    }
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_AFTER_LB, 0, "1", "next;",
+                  lflow_ref);
     ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 0, "1", "next;",
                   lflow_ref);
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 0, "1", "next;",
@@ -15914,6 +16051,7 @@ build_lswitch_and_lrouter_iterate_by_lsp(struct ovn_port *op,
     build_lswitch_arp_nd_responder_skip_local(op, lflows, match);
     build_lswitch_arp_nd_responder_known_ips(op, lflows, ls_ports,
                                              meter_groups, actions, match);
+    build_lswitch_dnat_mod_dl_dst_rules(op, lflows, lr_ports, actions, match);
     build_lswitch_arp_nd_forward_for_unknown_ips(op, lflows, actions, match);
     build_lswitch_dhcp_options_and_response(op, lflows, meter_groups);
     build_lswitch_external_port(op, lflows);
@@ -17603,6 +17741,8 @@ ovnnb_db_run(struct northd_input *input_data,
     ls_ct_skip_dst_lport_ips = smap_get_bool(input_data->nb_options,
                                              "ls_ct_skip_dst_lport_ips",
                                              false);
+    ls_dnat_mod_dl_dst = smap_get_bool(input_data->nb_options,
+                                       "ls_dnat_mod_dl_dst", false);
 
     const char *s = smap_get_def(input_data->nb_options,
                                  "version_compatibility", "");
