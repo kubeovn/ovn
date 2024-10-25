@@ -92,6 +92,9 @@ static bool default_acl_drop;
 
 static bool bcast_arp_req_flood = true;
 
+static struct sset node_local_dns_ip_v4 = SSET_INITIALIZER(&node_local_dns_ip_v4);
+static struct sset node_local_dns_ip_v6 = SSET_INITIALIZER(&node_local_dns_ip_v6);
+
 static bool compatible_21_06 = false;
 static bool compatible_22_03 = false;
 static bool compatible_22_12 = false;
@@ -6222,6 +6225,27 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_LB,
                       100, "ip", REGBIT_CONNTRACK_NAT" = 1; next;",
                       lflow_ref);
+
+        // skip conntrack when access node local dns ip
+        char *match = NULL;
+        const char **array = sset_array(&node_local_dns_ip_v4);
+        for (size_t i = 0; i < sset_count(&node_local_dns_ip_v4); i++) {
+            match = xasprintf("ip4 && ip4.dst == %s", array[i]);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_LB,
+                                             105, match, "next;",
+                                             &od->nbs->header_, lflow_ref);
+            free(match);
+        }
+        free(array);
+        array = sset_array(&node_local_dns_ip_v6);
+        for (size_t i = 0; i < sset_count(&node_local_dns_ip_v6); i++) {
+            match = xasprintf("ip6 && ip6.dst == %s", array[i]);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_LB,
+                                             105, match, "next;",
+                                             &od->nbs->header_, lflow_ref);
+            free(match);
+        }
+        free(array);
     }
 }
 
@@ -17433,6 +17457,34 @@ ovnnb_db_run(struct northd_input *input_data,
                                      "use_ct_inv_match", true);
     bcast_arp_req_flood = smap_get_bool(input_data->nb_options,
                                         "bcast_arp_req_flood", true);
+
+    sset_clear(&node_local_dns_ip_v4);
+    sset_clear(&node_local_dns_ip_v6);
+
+    const char *node_local_dns_ip = smap_get(input_data->nb_options,
+                                             "node_local_dns_ip");
+    if (node_local_dns_ip) {
+        ovs_be32 ip4;
+        struct in6_addr ip6;
+        char *cur, *next, *start;
+        next = start = xstrdup(node_local_dns_ip);
+        struct ds s = DS_EMPTY_INITIALIZER;
+        while ((cur = strsep(&next, ",")) && *cur) {
+            if (strchr(cur, ':')) {
+                if (ipv6_parse(cur, &ip6)) {
+                    ds_clear(&s);
+                    ipv6_format_addr(&ip6, &s);
+                    sset_add(&node_local_dns_ip_v6, ds_cstr_ro(&s));
+                }
+            } else if (ip_parse(cur, &ip4)) {
+                ds_clear(&s);
+                ds_put_format(&s, IP_FMT, IP_ARGS(ip4));
+                sset_add(&node_local_dns_ip_v4, ds_cstr_ro(&s));
+            }
+        }
+        ds_destroy(&s);
+        free(start);
+    }
 
     /* deprecated, use --event instead */
     controller_event_en = smap_get_bool(input_data->nb_options,
