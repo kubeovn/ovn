@@ -1629,7 +1629,7 @@ encode_SELECT(const struct ovnact_select *select,
     struct ofpact_group *og;
 
     struct ds ds = DS_EMPTY_INITIALIZER;
-    ds_put_format(&ds, "type=select,selection_method=dp_hash");
+    ds_put_format(&ds, "type=select,selection_method=hash,fields=ip_src");
 
     if (ovs_feature_is_supported(OVS_DP_HASH_L4_SYM_SUPPORT)) {
         /* Select dp-hash l4_symmetric by setting the upper 32bits of
