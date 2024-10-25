@@ -10957,12 +10957,26 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
         }
 
         if (lb_vip->n_backends || !lb_vip->empty_backend_rej) {
-            new_match_p = xasprintf("%s && is_chassis_resident(%s)",
-                                    new_match,
-                                    od->l3dgw_ports[0]->cr_port->json_key);
-            est_match_p = xasprintf("%s && is_chassis_resident(%s)",
-                                    est_match,
-                                    od->l3dgw_ports[0]->cr_port->json_key);
+            if (od->n_l3dgw_ports > 1) {
+                for (size_t j = 0; j < od->n_l3dgw_ports; j++) {
+                    if (find_lrp_member_ip(od->l3dgw_ports[j], lb_vip->vip_str)) {
+                        new_match_p = xasprintf("%s && is_chassis_resident(%s)",
+                                                new_match,
+                                                od->l3dgw_ports[j]->cr_port->json_key);
+                        est_match_p = xasprintf("%s && is_chassis_resident(%s)",
+                                                est_match,
+                                                od->l3dgw_ports[j]->cr_port->json_key);
+                        break;
+                    }
+                }
+            } else {
+                new_match_p = xasprintf("%s && is_chassis_resident(%s)",
+                                        new_match,
+                                        od->l3dgw_ports[0]->cr_port->json_key);
+                est_match_p = xasprintf("%s && is_chassis_resident(%s)",
+                                        est_match,
+                                        od->l3dgw_ports[0]->cr_port->json_key);
+            }
         }
 
         if (lb->skip_snat) {
@@ -11000,11 +11014,26 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
             continue;
         }
 
-        char *undnat_match_p = xasprintf(
-            "%s) && outport == %s && is_chassis_resident(%s)",
-            ds_cstr(&undnat_match),
-            od->l3dgw_ports[0]->json_key,
-            od->l3dgw_ports[0]->cr_port->json_key);
+        char *undnat_match_p = NULL;
+        if (od->n_l3dgw_ports > 1) {
+            for (size_t j = 0; j < od->n_l3dgw_ports; j++) {
+                if (find_lrp_member_ip(od->l3dgw_ports[j], lb_vip->vip_str)) {
+                    undnat_match_p = xasprintf(
+                        "%s) && outport == %s && is_chassis_resident(%s)",
+                        ds_cstr(&undnat_match),
+                        od->l3dgw_ports[j]->json_key,
+                        od->l3dgw_ports[j]->cr_port->json_key);
+                    break;
+                }
+            }
+        } else {
+            undnat_match_p = xasprintf(
+                "%s) && outport == %s && is_chassis_resident(%s)",
+                ds_cstr(&undnat_match),
+                od->l3dgw_ports[0]->json_key,
+                od->l3dgw_ports[0]->cr_port->json_key);
+        }
+
         if (lb->skip_snat) {
             ovn_lflow_add_with_hint(lflows, od, S_ROUTER_OUT_UNDNAT, 120,
                                     undnat_match_p, skip_snat_est_action,
