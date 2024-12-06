@@ -3909,6 +3909,11 @@ sync_pb_for_lrp(struct ovn_port *op,
         smap_add(&new, "ipv6_ra_pd_list", ipv6_pd_list);
     }
 
+    const bool bfd_only = smap_get_bool(&op->nbrp->options, "bfd-only", false);
+    if (bfd_only) {
+        smap_add(&new, "bfd-only", "true");
+    }
+
     sbrec_port_binding_set_options(op->sb, &new);
     smap_destroy(&new);
 }
@@ -10233,6 +10238,7 @@ static struct ovs_mutex bfd_lock = OVS_MUTEX_INITIALIZER;
 
 static bool check_bfd_state(
         const struct nbrec_logical_router_policy *rule,
+        const struct hmap *lr_ports,
         const struct hmap *bfd_connections,
         struct ovn_port *out_port,
         const char *nexthop)
@@ -10258,7 +10264,11 @@ static bool check_bfd_state(
         }
 
         if (strcmp(nb_bt->logical_port, out_port->key)) {
-            continue;
+            struct ovn_port *op = ovn_port_find(lr_ports, nb_bt->logical_port);
+            if (!op || !op->nbrp ||
+                !smap_get_bool(&op->nbrp->options, "bfd-only", false)) {
+                continue;
+            }
         }
 
         struct bfd_entry *bfd_e = bfd_port_lookup(bfd_connections,
@@ -10312,7 +10322,8 @@ build_routing_policy_flow(struct lflow_table *lflows, struct ovn_datapath *od,
             return;
         }
 
-        if (!check_bfd_state(rule, bfd_connections, out_port, nexthop)) {
+        if (!check_bfd_state(rule, lr_ports, bfd_connections,
+                             out_port, nexthop)) {
             return;
         }
 
@@ -10409,8 +10420,8 @@ build_ecmp_routing_policy_flows(struct lflow_table *lflows,
             goto cleanup;
         }
 
-        if (!check_bfd_state(rule, bfd_connections, out_port,
-                             rule->nexthops[i])) {
+        if (!check_bfd_state(rule, lr_ports, bfd_connections,
+                             out_port, rule->nexthops[i])) {
             continue;
         }
 
@@ -12369,6 +12380,9 @@ build_lrouter_bfd_flows(struct lflow_table *lflows, struct ovn_port *op,
 
     struct ds ip_list = DS_EMPTY_INITIALIZER;
     struct ds match = DS_EMPTY_INITIALIZER;
+    char *redirect_name = ovn_chassis_redirect_name(op->nbrp->name);
+    char *actions = xasprintf("outport = \"%s\"; output;", redirect_name);
+    bool bfd_only = smap_get_bool(&op->nbrp->options, "bfd-only", false);
 
     if (op->lrp_networks.n_ipv4_addrs) {
         op_put_v4_networks(&ip_list, op, false);
@@ -12387,6 +12401,20 @@ build_lrouter_bfd_flows(struct lflow_table *lflows, struct ovn_port *op,
                                                  meter_groups),
                                   &op->nbrp->header_,
                                   lflow_ref);
+        if ((op->nbrp->ha_chassis_group || op->nbrp->n_gateway_chassis) &&
+            bfd_only) {
+            ds_clear(&match);
+            ds_put_format(&match, "ip4.dst == %s && udp.dst == 3784 && "
+                          "!is_chassis_resident(\"%s\")",
+                          ds_cstr(&ip_list), redirect_name);
+            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+                                      115, ds_cstr(&match), actions, NULL,
+                                      copp_meter_get(COPP_BFD,
+                                                     op->od->nbr->copp,
+                                                     meter_groups),
+                                      &op->nbrp->header_,
+                                      lflow_ref);
+        }
     }
     if (op->lrp_networks.n_ipv6_addrs) {
         ds_clear(&ip_list);
@@ -12408,10 +12436,26 @@ build_lrouter_bfd_flows(struct lflow_table *lflows, struct ovn_port *op,
                                                  meter_groups),
                                   &op->nbrp->header_,
                                   lflow_ref);
+        if ((op->nbrp->ha_chassis_group || op->nbrp->n_gateway_chassis) &&
+            bfd_only) {
+            ds_clear(&match);
+            ds_put_format(&match, "ip6.dst == %s && udp.dst == 3784 && "
+                          "!is_chassis_resident(\"%s\")",
+                          ds_cstr(&ip_list), redirect_name);
+            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+                                      115, ds_cstr(&match), actions, NULL,
+                                      copp_meter_get(COPP_BFD,
+                                                     op->od->nbr->copp,
+                                                     meter_groups),
+                                      &op->nbrp->header_,
+                                      lflow_ref);
+        }
     }
 
     ds_destroy(&ip_list);
     ds_destroy(&match);
+    free(redirect_name);
+    free(actions);
 }
 
 /* Logical router ingress Table 0: L2 Admission Control
