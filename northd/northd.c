@@ -5987,6 +5987,33 @@ build_pre_acls(struct ovn_datapath *od, const struct hmap *port_groups,
         ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 110, "eth.mcast",
                       "next;");
 
+        char *match;
+        // skip conntrack when access node local dns ip
+        if (strlen(node_local_dns_ip_v4) != 0) {
+            match = xasprintf("ip4 && ip4.dst == %s", node_local_dns_ip_v4);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                S_SWITCH_IN_PRE_ACL, 110, match, "next;",
+                OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+                
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                S_SWITCH_OUT_PRE_ACL, 110, match, "next;",
+                OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+            free(match);
+        }
+
+        // skip conntrack when access node local dns ip
+        if (strlen(node_local_dns_ip_v6) != 0) {
+            match = xasprintf("ip6 && ip6.dst == %s", node_local_dns_ip_v6);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                S_SWITCH_IN_PRE_ACL, 110, match, "next;",
+                OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                S_SWITCH_OUT_PRE_ACL, 110, match, "next;",
+                OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
+            free(match);
+        }
+
         /* Ingress and Egress Pre-ACL Table (Priority 100).
          *
          * Regardless of whether the ACL is "from-lport" or "to-lport",
@@ -6205,7 +6232,7 @@ build_pre_lb(struct ovn_datapath *od, const struct shash *meter_groups,
 
         // skip conntrack when access node local dns ip
         if (strlen(node_local_dns_ip_v4) != 0) {
-            match = xasprintf("ip4 && ip4.dst == %s/32", node_local_dns_ip_v4);
+            match = xasprintf("ip4 && ip4.dst == %s", node_local_dns_ip_v4);
             ovn_lflow_add_with_kube_ovn_hint(lflows, od,
                 S_SWITCH_IN_PRE_LB, 105, match, "next;",
                 OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
@@ -6213,7 +6240,7 @@ build_pre_lb(struct ovn_datapath *od, const struct shash *meter_groups,
         }
 
         if (strlen(node_local_dns_ip_v6) != 0) {
-            match = xasprintf("ip6 && ip6.dst == %s/128", node_local_dns_ip_v6);
+            match = xasprintf("ip6 && ip6.dst == %s", node_local_dns_ip_v6);
             ovn_lflow_add_with_kube_ovn_hint(lflows, od,
                 S_SWITCH_IN_PRE_LB, 105, match, "next;",
                 OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT);
