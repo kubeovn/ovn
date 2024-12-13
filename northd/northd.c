@@ -6482,6 +6482,36 @@ build_ls_stateful_rec_pre_acls(
                           "next;", lflow_ref);
         }
 
+        // skip conntrack when access node local dns ip
+        char *match = NULL;
+        const char **array = sset_array(&node_local_dns_ip_v4);
+        for (size_t i = 0; i < sset_count(&node_local_dns_ip_v4); i++) {
+            match = xasprintf("ip4 && ip4.dst == %s", array[i]);
+
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_ACL,
+                                    110, match, "next;",
+                                    &od->nbs->header_, lflow_ref);
+
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
+                                    110, match, "next;",
+                                    &od->nbs->header_, lflow_ref);
+            free(match);
+        }
+        free(array);
+        array = sset_array(&node_local_dns_ip_v6);
+        for (size_t i = 0; i < sset_count(&node_local_dns_ip_v6); i++) {
+            match = xasprintf("ip6 && ip6.dst == %s", array[i]);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_ACL,
+                                    110, match, "next;",
+                                    &od->nbs->header_, lflow_ref);
+
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
+                                    110, match, "next;",
+                                    &od->nbs->header_, lflow_ref);
+            free(match);
+        }
+        free(array);
+
         /* Ingress and Egress Pre-ACL Table (Priority 100).
          *
          * Regardless of whether the ACL is "from-lport" or "to-lport",
