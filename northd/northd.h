@@ -653,6 +653,14 @@ struct ovn_port {
     struct lflow_ref *stateful_lflow_ref;
 };
 
+struct chassis_lsp_entry {
+    struct hmap_node hmap_node;  // 用于在哈希映射中存储节点
+    const struct sbrec_chassis *chassis;  // 指向 chassis 的指针
+    struct ovn_port **lsp_array;  // 存储逻辑端口的数组
+    size_t n_lsps;  // 逻辑端口的数量
+    char *backend_ips;  // 存储所有 lsp 的 IP 的字符串
+};
+
 void ovnnb_db_run(struct northd_input *input_data,
                   struct northd_data *data,
                   struct ovsdb_idl_txn *ovnnb_txn,
