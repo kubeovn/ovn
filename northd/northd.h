@@ -895,6 +895,16 @@ find_route_outport(const struct hmap *lr_ports, const char *output_port,
                    bool force_out_port,
                    struct ovn_port **out_port, const char **lrp_addr_s);
 
+struct chassis_lp_entry {
+    struct hmap_node hmap_node;  // Node for storing in hash map
+    const struct sbrec_chassis *chassis;  // Pointer to chassis
+    struct ovn_port **lp_array;  // Array of logical ports
+    size_t n_lps;  // Number of logical ports
+    char *backend_ips;  // String storing all ls IPs
+    char *lp_names; // String storing all lp names
+    struct sset logical_ports;  // Set for storing logical ports
+};
+
 void ovnnb_db_run(struct northd_input *input_data,
                   struct northd_data *data,
                   struct ovsdb_idl_txn *ovnsb_txn);
