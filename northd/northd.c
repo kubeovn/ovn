@@ -13384,6 +13384,20 @@ build_distr_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     if (lb_is_centralized &&
         (!vector_is_empty(&ctx->lb_vip->backends) ||
         !ctx->lb_vip->empty_backend_rej)) {
+        if (vector_len(&od->l3dgw_ports) > 1) {
+            dgp = NULL;
+            for (size_t i = 0; i < vector_len(&od->l3dgw_ports); i++) {
+                struct ovn_port *candidate = vector_get(&od->l3dgw_ports, i,
+                                                        struct ovn_port *);
+                if (lrp_find_member_ip(candidate, ctx->lb_vip->vip_str)) {
+                    dgp = candidate;
+                    break;
+                }
+            }
+            if (!dgp) {
+                return;
+            }
+        }
         ds_put_format(ctx->new_match, " && is_chassis_resident(%s)",
                       dgp->cr_port->json_key);
     }
