@@ -18,6 +18,7 @@
 #define OVN_CONTROLLER_H 1
 
 #include <stdint.h>
+#include <stdbool.h>
 
 struct ovsrec_bridge_table;
 
@@ -25,5 +26,7 @@ const struct ovsrec_bridge *get_bridge(const struct ovsrec_bridge_table *,
                                        const char *br_name);
 
 enum chassis_tunnel_type get_tunnel_type(const char *name);
+
+extern bool lflow_kube_ovn_skip_ct;
 
 #endif /* controller/ovn-controller.h */
