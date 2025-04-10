@@ -103,6 +103,8 @@ static bool bcast_arp_req_flood = true;
 static struct sset node_local_dns_ip_v4 = SSET_INITIALIZER(&node_local_dns_ip_v4);
 static struct sset node_local_dns_ip_v6 = SSET_INITIALIZER(&node_local_dns_ip_v6);
 
+static bool ls_ct_skip_dst_lport_ips = false;
+
 #define MAX_OVN_TAGS 4096
 
 
@@ -6349,6 +6351,104 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
             free(match);
         }
         free(array);
+
+        if (!ls_ct_skip_dst_lport_ips) {
+            return;
+        }
+        if (od->n_router_ports != 1 && od->n_localnet_ports == 0) {
+            return;
+        }
+
+        ovs_be32 lla_ip4;
+        inet_pton(AF_INET, "169.254.0.0", &lla_ip4);
+        struct ovn_port *op;
+
+        if (od->n_router_ports == 1) {
+            struct ovn_port *peer = od->router_ports[0]->peer;
+            if (!peer || !peer->nbrp) {
+                return;
+            }
+
+            for (size_t i = 0; i < peer->od->n_router_ports; i++) {
+                op = peer->od->router_ports[i];
+                for (size_t j = 0; j < op->lrp_networks.n_ipv4_addrs; j++) {
+                    struct ipv4_netaddr *addrs;
+                    addrs = &op->lrp_networks.ipv4_addrs[j];
+                    if (addrs->plen >= 16 &&
+                        (addrs->addr & htonl(0xffff0000)) == lla_ip4) {
+                        // skip link local address
+                        continue;
+                    }
+                    match = xasprintf("ip4 && ip4.dst == %s/%u",
+                                      addrs->network_s, addrs->plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        &od->nbs->header_, lflow_ref);
+                    free(match);
+                }
+
+                for (size_t j = 0; j < op->lrp_networks.n_ipv6_addrs; j++) {
+                    struct ipv6_netaddr *addrs;
+                    addrs = &op->lrp_networks.ipv6_addrs[j];
+                    if (in6_is_lla(&addrs->network)) {
+                        // skip link local address
+                        continue;
+                    }
+                    match = xasprintf("ip6 && ip6.dst == %s/%u",
+                                      addrs->network_s, addrs->plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        &od->nbs->header_, lflow_ref);
+                    free(match);
+                }
+            }
+
+            return;
+        }
+
+        ovs_be32 ipv4;
+        struct in6_addr ipv6;
+        unsigned int plen;
+        char *error;
+        char buf[INET6_ADDRSTRLEN];
+
+        for (size_t i = 0; i < od->n_localnet_ports; i++) {
+            op = od->localnet_ports[i];
+            const char *ipv4_network = smap_get(&op->nbsp->external_ids,
+                                                "ipv4_network");
+            const char *ipv6_network = smap_get(&op->nbsp->external_ids,
+                                                "ipv6_network");
+            if (ipv4_network) {
+                error = ip_parse_cidr(ipv4_network, &ipv4, &plen);
+                if (error) {
+                    free(error);
+                    continue;
+                }
+                if (plen && plen != 32) {
+                    match = xasprintf("ip4 && ip4.dst == "IP_FMT"/%u",
+                                      IP_ARGS(ipv4), plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        &od->nbs->header_, lflow_ref);
+                    free(match);
+                }
+            }
+            if (ipv6_network) {
+                error = ipv6_parse_cidr(ipv6_network, &ipv6, &plen);
+                if (error) {
+                    free(error);
+                    continue;
+                }
+                if (plen && plen != 128) {
+                    inet_ntop(AF_INET6, &ipv6, buf, sizeof buf);
+                    match = xasprintf("ip6 && ip6.dst == %s/%u", buf, plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        &od->nbs->header_, lflow_ref);
+                    free(match);
+                }
+            }
+        }
     }
 }
 
@@ -19328,6 +19428,10 @@ ovnnb_db_run(struct northd_input *input_data,
 
     vxlan_mode = is_vxlan_mode(input_data->nb_options,
                                input_data->sbrec_chassis_table);
+
+    ls_ct_skip_dst_lport_ips = smap_get_bool(input_data->nb_options,
+                                             "ls_ct_skip_dst_lport_ips",
+                                             false);
 
     build_datapaths(ovnsb_txn,
                     input_data->nbrec_logical_switch_table,
