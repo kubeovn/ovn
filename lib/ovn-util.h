@@ -31,6 +31,8 @@
 #define ROUTE_ORIGIN_CONNECTED "connected"
 #define ROUTE_ORIGIN_STATIC "static"
 
+#define OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT "kube-ovn: skip conntrack"
+
 #define ETH_CRC_LENGTH 4
 #define ETHERNET_OVERHEAD (ETH_HEADER_LEN + ETH_CRC_LENGTH)
 
