@@ -111,6 +111,9 @@ static bool bcast_arp_req_flood = true;
 static struct sset node_local_dns_ip_v4 = SSET_INITIALIZER(&node_local_dns_ip_v4);
 static struct sset node_local_dns_ip_v6 = SSET_INITIALIZER(&node_local_dns_ip_v6);
 
+static bool ls_ct_skip_dst_lport_ips = false;
+
+static bool ls_dnat_mod_dl_dst = false;
 #define MAX_OVN_TAGS 4096
 
 #define MAX_OVN_NF_GROUP_IDS 256
@@ -8981,7 +8984,58 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
 }
 
 static void
-build_stateful(struct ovn_datapath *od, struct lflow_table *lflows,
+
+build_lswitch_dnat_mod_dl_dst_rules(struct ovn_port *op,
+                                    struct lflow_table *lflows,
+                                    const struct hmap *lr_ports,
+                                    struct ds *actions,
+                                    struct ds *match)
+{
+    if (!ls_dnat_mod_dl_dst) {
+        return;
+    }
+    if (!op->nbsp || !op->od || !op->od->nbs || op->od->n_router_ports) {
+        return;
+    }
+    if (!strcmp(op->nbsp->type, "virtual") ||
+        !strcmp(op->nbsp->type, "localport")) {
+        return;
+    }
+    if (lsp_is_external(op->nbsp) || lsp_is_router(op->nbsp) || op->has_unknown) {
+        return;
+    }
+
+    if (op->n_lsp_addrs != 1 || !strlen(op->lsp_addrs[0].ea_s) ||
+        (!op->lsp_addrs[0].n_ipv4_addrs && !op->lsp_addrs[0].n_ipv6_addrs)) {
+        return;
+    }
+
+    ds_clear(actions);
+    ds_put_format(actions, "eth.dst = %s; outport = \"%s\"; output;",
+                  op->lsp_addrs[0].ea_s, op->key);
+
+    for (size_t i = 0; i < op->lsp_addrs[0].n_ipv4_addrs; i++) {
+        ds_clear(match);
+        ds_put_format(match, REGBIT_CONNTRACK_NAT" != 0 && ip4.dst == %s",
+                      op->lsp_addrs[0].ipv4_addrs[i].addr_s);
+        ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_L2_LKUP, 55,
+                                ds_cstr(match), ds_cstr(actions),
+                                &op->nbsp->header_, op->lflow_ref);
+    }
+
+    for (size_t i = 0; i < op->lsp_addrs[0].n_ipv6_addrs; i++) {
+        ds_clear(match);
+        ds_put_format(match, REGBIT_CONNTRACK_NAT" != 0 && ip6.dst == %s",
+                        op->lsp_addrs[0].ipv6_addrs[i].addr_s);
+        ovn_lflow_add_with_hint(lflows, op->od, S_SWITCH_IN_L2_LKUP, 55,
+                                ds_cstr(match), ds_cstr(actions),
+                                &op->nbsp->header_, op->lflow_ref);
+    }
+}
+
+static void
+build_stateful(struct ovn_datapath *od,
+               struct lflow_table *lflows,
                struct lflow_ref *lflow_ref)
 {
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -19560,6 +19614,7 @@ build_lswitch_and_lrouter_iterate_by_lsp(struct ovn_port *op,
     build_lswitch_from_localnet_op(op, lflows, match);
     build_lswitch_arp_nd_responder_known_ips(op, lflows, ls_ports,
                                              meter_groups, actions, match);
+    build_lswitch_dnat_mod_dl_dst_rules(op, lflows, lr_ports, actions, match);
     build_lswitch_arp_nd_forward_for_unknown_ips(op, lflows, actions, match);
     build_lswitch_dhcp_options_and_response(op, lflows, meter_groups);
     build_lswitch_external_port(op, lflows);
@@ -21091,6 +21146,12 @@ ovnnb_db_run(struct northd_input *input_data,
                                     false);
 
     vxlan_mode = input_data->vxlan_mode;
+
+    ls_ct_skip_dst_lport_ips = smap_get_bool(input_data->nb_options,
+                                             "ls_ct_skip_dst_lport_ips",
+                                             false);
+    ls_dnat_mod_dl_dst = smap_get_bool(input_data->nb_options,
+                                       "ls_dnat_mod_dl_dst", false);
 
     build_datapaths(input_data->synced_lses,
                     input_data->synced_lrs,
