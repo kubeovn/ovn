@@ -123,6 +123,10 @@ lport_can_bind_on_this_chassis(const struct sbrec_chassis *chassis_rec,
                                const struct sbrec_port_binding *pb)
 {
     if (pb->requested_chassis == chassis_rec) {
+        if (pb->n_requested_additional_chassis == 1 &&
+            pb->requested_additional_chassis[0] == chassis_rec) {
+                return CAN_BIND_AS_ADDITIONAL;
+        }
         return CAN_BIND_AS_MAIN;
     }
 
