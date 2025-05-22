@@ -38,6 +38,7 @@
 #include "ovn-controller.h"
 #include "lib/chassis-index.h"
 #include "lib/mcast-group-index.h"
+#include "lib/ovn-l7.h"
 #include "lib/ovn-sb-idl.h"
 #include "lib/ovn-util.h"
 #include "ovn/actions.h"
@@ -1628,6 +1629,36 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_port_binding_by_name,
                         binding->header_.uuid.parts[0],
                         &match, ofpacts_p, &binding->header_.uuid);
 
+        if (smap_get_bool(&binding->options, "bfd-only", false)) {
+            match_set_nw_proto(&match, IPPROTO_UDP);
+            match_set_tp_dst(&match, htons(BFD_DEST_PORT));
+            ofpbuf_clear(ofpacts_p);
+            encode_controller_op(ACTION_OPCODE_BFD_MSG, 0, ofpacts_p);
+
+            for (size_t i = 0; i < binding->n_mac; i++) {
+                struct lport_addresses laddrs;
+                if (!extract_lsp_addresses(binding->mac[i], &laddrs)) {
+                    continue;
+                }
+
+                for (size_t j = 0; j < laddrs.n_ipv4_addrs; j++) {
+                    match_set_nw_dst(&match, laddrs.ipv4_addrs[j].addr);
+                    ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 110,
+                        binding->header_.uuid.parts[0],
+                        &match, ofpacts_p, &binding->header_.uuid);
+                }
+                match_set_nw_dst(&match, 0);
+
+                for (size_t j = 0; j < laddrs.n_ipv6_addrs; j++) {
+                    match_set_ipv6_dst(&match, &laddrs.ipv6_addrs[j].addr);
+                    ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 110,
+                                    binding->header_.uuid.parts[0],
+                                    &match, ofpacts_p, &binding->header_.uuid);
+                }
+
+                destroy_lport_addresses(&laddrs);
+            }
+        }
         return;
     }
 
