@@ -568,6 +568,11 @@ check_nb_options_out_of_sync(const struct nbrec_nb_global *nb,
         return true;
     }
 
+    if (config_out_of_sync(&nb->options, &config_data->nb_options,
+                           "ls_ct_skip_dst_lport_ips", false)) {
+        return true;
+    }
+
     return false;
 }
 
