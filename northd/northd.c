@@ -6213,12 +6213,10 @@ build_ls_stateful_rec_pre_acls(
         char *match = NULL;
         const char **array = sset_array(&node_local_dns_ip_v4);
         for (size_t i = 0; i < sset_count(&node_local_dns_ip_v4); i++) {
-            match = xasprintf("ip4 && ip4.dst == %s", array[i]);
-
+            match = xasprintf("ip4 && (ip4.dst == %s || ip4.src == %s)", array[i], array[i]);
             ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_ACL,
                                     110, match, "next;",
                                     &od->nbs->header_, lflow_ref);
-
             ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
                                     110, match, "next;",
                                     &od->nbs->header_, lflow_ref);
@@ -6227,11 +6225,10 @@ build_ls_stateful_rec_pre_acls(
         free(array);
         array = sset_array(&node_local_dns_ip_v6);
         for (size_t i = 0; i < sset_count(&node_local_dns_ip_v6); i++) {
-            match = xasprintf("ip6 && ip6.dst == %s", array[i]);
+            match = xasprintf("ip6 && (ip6.dst == %s || ip6.src == %s)", array[i], array[i]);
             ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_ACL,
                                     110, match, "next;",
                                     &od->nbs->header_, lflow_ref);
-
             ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_OUT_PRE_ACL,
                                     110, match, "next;",
                                     &od->nbs->header_, lflow_ref);
@@ -6475,8 +6472,11 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
         char *match = NULL;
         const char **array = sset_array(&node_local_dns_ip_v4);
         for (size_t i = 0; i < sset_count(&node_local_dns_ip_v4); i++) {
-            match = xasprintf("ip4 && ip4.dst == %s", array[i]);
+            match = xasprintf("ip4 && ((ip4.dst == %s && udp.dst == 53) || (ip4.src == %s && udp.src == 53))", array[i], array[i]);
             ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_LB,
+                                             105, match, "next;",
+                                             &od->nbs->header_, lflow_ref);
+           ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_OUT_PRE_LB,
                                              105, match, "next;",
                                              &od->nbs->header_, lflow_ref);
             free(match);
@@ -6484,8 +6484,11 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
         free(array);
         array = sset_array(&node_local_dns_ip_v6);
         for (size_t i = 0; i < sset_count(&node_local_dns_ip_v6); i++) {
-            match = xasprintf("ip6 && ip6.dst == %s", array[i]);
+            match = xasprintf("ip6 && ((ip6.dst == %s && udp.dst == 53) || (ip6.src == %s && udp.src == 53))", array[i], array[i]);
             ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_LB,
+                                             105, match, "next;",
+                                             &od->nbs->header_, lflow_ref);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_OUT_PRE_LB,
                                              105, match, "next;",
                                              &od->nbs->header_, lflow_ref);
             free(match);
@@ -7394,6 +7397,50 @@ build_acls(const struct ls_stateful_record *ls_stateful_rec,
                   REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
                   lflow_ref);
 
+    /* Skip ACL evaluation for node local DNS traffic to avoid blocking
+     * DNS queries to node-local DNS servers (e.g., CoreDNS in Kubernetes).
+     * This ensures that DNS traffic to node-local DNS IPs bypasses ACL
+     * processing at a higher priority (65532) than user-defined ACLs. */
+    char *nodelocaldns_match = NULL;
+    const char **nodelocaldns_array = sset_array(&node_local_dns_ip_v4);
+    for (size_t i = 0; i < sset_count(&node_local_dns_ip_v4); i++) {
+        nodelocaldns_match = xasprintf("ip4 && (ip4.dst == %s || ip4.src == %s)", 
+                                       nodelocaldns_array[i], nodelocaldns_array[i]);
+        ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_ACL_EVAL,
+                                UINT16_MAX - 3, nodelocaldns_match,
+                                REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                                &od->nbs->header_, lflow_ref);
+        ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_OUT_ACL_EVAL,
+                                UINT16_MAX - 3, nodelocaldns_match,
+                                REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                                &od->nbs->header_, lflow_ref);
+        ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL,
+                                UINT16_MAX - 3, nodelocaldns_match,
+                                REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                                &od->nbs->header_, lflow_ref);
+        free(nodelocaldns_match);
+    }
+    free(nodelocaldns_array);
+
+    nodelocaldns_array = sset_array(&node_local_dns_ip_v6);
+    for (size_t i = 0; i < sset_count(&node_local_dns_ip_v6); i++) {
+        nodelocaldns_match = xasprintf("ip6 && (ip6.dst == %s || ip6.src == %s)", 
+                                       nodelocaldns_array[i], nodelocaldns_array[i]);
+        ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_ACL_EVAL,
+                                UINT16_MAX - 3, nodelocaldns_match,
+                                REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                                &od->nbs->header_, lflow_ref);
+        ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_OUT_ACL_EVAL,
+                                UINT16_MAX - 3, nodelocaldns_match,
+                                REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                                &od->nbs->header_, lflow_ref);
+        ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_ACL_AFTER_LB_EVAL,
+                                UINT16_MAX - 3, nodelocaldns_match,
+                                REGBIT_ACL_VERDICT_ALLOW " = 1; next;",
+                                &od->nbs->header_, lflow_ref);
+        free(nodelocaldns_match);
+    }
+    free(nodelocaldns_array);
     /* Ingress or Egress ACL Table (Various priorities). */
     for (size_t i = 0; i < od->nbs->n_acls; i++) {
         struct nbrec_acl *acl = od->nbs->acls[i];
