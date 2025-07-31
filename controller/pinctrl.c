@@ -7954,15 +7954,18 @@ bfd_monitor_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             continue;
         }
 
+        bool bfd_only = smap_get_bool(&pb->options, "bfd-only", false);
         const char *peer_s = smap_get(&pb->options, "peer");
-        if (!peer_s) {
+        if (!peer_s && !bfd_only) {
             continue;
         }
 
-        const struct sbrec_port_binding *peer
-            = lport_lookup_by_name(sbrec_port_binding_by_name, peer_s);
-        if (!peer) {
-            continue;
+        if (peer_s && !bfd_only) {
+            const struct sbrec_port_binding *peer
+                = lport_lookup_by_name(sbrec_port_binding_by_name, peer_s);
+            if (!peer) {
+                continue;
+            }
         }
 
         char *redirect_name = xasprintf("cr-%s", pb->logical_port);
