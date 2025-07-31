@@ -4292,6 +4292,11 @@ sync_pb_for_lrp(struct ovn_port *op,
         smap_add(&new, "ipv6_ra_pd_list", ipv6_pd_list);
     }
 
+    const bool bfd_only = smap_get_bool(&op->nbrp->options, "bfd-only", false);
+    if (bfd_only) {
+        smap_add(&new, "bfd-only", "true");
+    }
+
     sbrec_port_binding_set_options(op->sb, &new);
     smap_destroy(&new);
 }
@@ -8577,7 +8582,7 @@ static void
 
 build_lswitch_dnat_mod_dl_dst_rules(struct ovn_port *op,
                                     struct lflow_table *lflows,
-                                    const struct hmap *lr_ports,
+                                    const struct hmap *lr_ports OVS_UNUSED,
                                     struct ds *actions,
                                     struct ds *match)
 {
@@ -11140,10 +11145,13 @@ get_outport_for_routing_policy_nexthop(struct ovn_datapath *od,
     return NULL;
 }
 
-static bool check_bfd_state(const struct nbrec_logical_router_policy *rule,
-                            struct ovn_port *out_port, const char *nexthop,
-                            const struct hmap *bfd_connections,
-                            struct hmap *bfd_active_connections)
+static bool check_bfd_state(
+        const struct nbrec_logical_router_policy *rule,
+        const struct hmap *lr_ports,
+        const struct hmap *bfd_connections,
+        struct ovn_port *out_port,
+        const char *nexthop,
+        struct hmap *bfd_active_connections)
 {
     struct in6_addr nexthop_v6;
     bool is_nexthop_v6 = ipv6_parse(nexthop, &nexthop_v6);
@@ -11165,7 +11173,11 @@ static bool check_bfd_state(const struct nbrec_logical_router_policy *rule,
         }
 
         if (strcmp(nb_bt->logical_port, out_port->key)) {
-            continue;
+            struct ovn_port *op = ovn_port_find(lr_ports, nb_bt->logical_port);
+            if (!op || !op->nbrp ||
+                !smap_get_bool(&op->nbrp->options, "bfd-only", false)) {
+                continue;
+            }
         }
 
         struct bfd_entry *bfd_e = bfd_port_lookup(bfd_connections,
@@ -11227,6 +11239,7 @@ build_routing_policy_flow(struct lflow_table *lflows, struct ovn_datapath *od,
                          rule->priority, nexthop);
             return;
         }
+
 
         uint32_t pkt_mark = smap_get_uint(&rule->options, "pkt_mark", 0);
         if (pkt_mark) {
@@ -11328,6 +11341,7 @@ build_ecmp_routing_policy_flows(struct lflow_table *lflows,
                             rule->priority, rp->valid_nexthops[i]);
             goto cleanup;
         }
+
 
         ds_clear(&actions);
         uint32_t pkt_mark = smap_get_uint(&rule->options, "pkt_mark", 0);
@@ -12802,7 +12816,7 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                            const struct shash *meter_groups,
                            const struct ovn_datapaths *ls_datapaths,
                            const struct hmap *svc_monitor_map,
-                           struct hmap *ls_ports,
+                           const struct hmap *ls_ports,
                            struct ds *match, struct ds *action)
 {
     if (!lb_dps->n_nb_ls) {
@@ -13689,6 +13703,9 @@ build_lrouter_bfd_flows(struct lflow_table *lflows, struct ovn_port *op,
 
     struct ds ip_list = DS_EMPTY_INITIALIZER;
     struct ds match = DS_EMPTY_INITIALIZER;
+    char *redirect_name = ovn_chassis_redirect_name(op->nbrp->name);
+    char *actions = xasprintf("outport = \"%s\"; output;", redirect_name);
+    bool bfd_only = smap_get_bool(&op->nbrp->options, "bfd-only", false);
 
     if (op->lrp_networks.n_ipv4_addrs) {
         op_put_v4_networks(&ip_list, op, false);
@@ -13707,6 +13724,20 @@ build_lrouter_bfd_flows(struct lflow_table *lflows, struct ovn_port *op,
                                                  meter_groups),
                                   &op->nbrp->header_,
                                   lflow_ref);
+        if ((op->nbrp->ha_chassis_group || op->nbrp->n_gateway_chassis) &&
+            bfd_only) {
+            ds_clear(&match);
+            ds_put_format(&match, "ip4.dst == %s && udp.dst == 3784 && "
+                          "!is_chassis_resident(\"%s\")",
+                          ds_cstr(&ip_list), redirect_name);
+            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+                                      115, ds_cstr(&match), actions, NULL,
+                                      copp_meter_get(COPP_BFD,
+                                                     op->od->nbr->copp,
+                                                     meter_groups),
+                                      &op->nbrp->header_,
+                                      lflow_ref);
+        }
     }
     if (op->lrp_networks.n_ipv6_addrs) {
         ds_clear(&ip_list);
@@ -13728,10 +13759,26 @@ build_lrouter_bfd_flows(struct lflow_table *lflows, struct ovn_port *op,
                                                  meter_groups),
                                   &op->nbrp->header_,
                                   lflow_ref);
+        if ((op->nbrp->ha_chassis_group || op->nbrp->n_gateway_chassis) &&
+            bfd_only) {
+            ds_clear(&match);
+            ds_put_format(&match, "ip6.dst == %s && udp.dst == 3784 && "
+                          "!is_chassis_resident(\"%s\")",
+                          ds_cstr(&ip_list), redirect_name);
+            ovn_lflow_add_with_hint__(lflows, op->od, S_ROUTER_IN_IP_INPUT,
+                                      115, ds_cstr(&match), actions, NULL,
+                                      copp_meter_get(COPP_BFD,
+                                                     op->od->nbr->copp,
+                                                     meter_groups),
+                                      &op->nbrp->header_,
+                                      lflow_ref);
+        }
     }
 
     ds_destroy(&ip_list);
     ds_destroy(&match);
+    free(redirect_name);
+    free(actions);
 }
 
 /* Logical router ingress Table 0: L2 Admission Control
@@ -14602,9 +14649,8 @@ build_route_policies(struct ovn_datapath *od, const struct hmap *lr_ports,
                 struct ovn_port *out_port =
                     get_outport_for_routing_policy_nexthop(
                             od, lr_ports, rule->priority, nexthop);
-                if (!out_port || !check_bfd_state(rule, out_port, nexthop,
-                                                  bfd_connections,
-                                                  bfd_active_connections)) {
+                if (!out_port || !check_bfd_state(rule, lr_ports, bfd_connections,
+                                                  out_port, nexthop, bfd_active_connections)) {
                     continue;
                 }
                 valid_nexthops[n_valid_nexthops++] = nexthop;
