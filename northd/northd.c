@@ -111,6 +111,10 @@ static bool bcast_arp_req_flood = true;
 static struct sset node_local_dns_ip_v4 = SSET_INITIALIZER(&node_local_dns_ip_v4);
 static struct sset node_local_dns_ip_v6 = SSET_INITIALIZER(&node_local_dns_ip_v6);
 
+/* User-defined destination IP CIDRs that should skip conntrack processing */
+static struct sset skip_conntrack_dst_cidrs_v4 = SSET_INITIALIZER(&skip_conntrack_dst_cidrs_v4);
+static struct sset skip_conntrack_dst_cidrs_v6 = SSET_INITIALIZER(&skip_conntrack_dst_cidrs_v6);
+
 static bool ls_ct_skip_dst_lport_ips = false;
 
 static bool ls_dnat_mod_dl_dst = false;
@@ -6806,6 +6810,132 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
             free(match);
         }
         free(array);
+        /* Skip conntrack for user-defined destination IP CIDRs
+         *
+         * Add priority 105 flows to skip conntrack processing for destinations
+         * matching user-specified destination IP CIDRs. These flows take precedence over
+         * the priority 100 flow that sends all IP traffic to conntrack.
+         *
+         * This allows administrators to optimize performance by excluding
+         * high-volume cross-subnet traffic or services that don't need
+         * connection tracking (e.g., stateless services, monitoring traffic).
+         */
+        array = sset_array(&skip_conntrack_dst_cidrs_v4);
+        for (size_t i = 0; i < sset_count(&skip_conntrack_dst_cidrs_v4); i++) {
+            match = xasprintf("ip4 && ip4.dst == %s", array[i]);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_LB,
+                                             105, match, "next;",
+                                             &od->nbs->header_, lflow_ref);
+            free(match);
+        }
+        free(array);
+        array = sset_array(&skip_conntrack_dst_cidrs_v6);
+        for (size_t i = 0; i < sset_count(&skip_conntrack_dst_cidrs_v6); i++) {
+            match = xasprintf("ip6 && ip6.dst == %s", array[i]);
+            ovn_lflow_add_with_kube_ovn_hint(lflows, od, S_SWITCH_IN_PRE_LB,
+                                             105, match, "next;",
+                                             &od->nbs->header_, lflow_ref);
+            free(match);
+        }
+        free(array);
+
+        if (!ls_ct_skip_dst_lport_ips) {
+            return;
+        }
+        if (od->n_router_ports != 1 && od->n_localnet_ports == 0) {
+            return;
+        }
+
+        ovs_be32 lla_ip4;
+        inet_pton(AF_INET, "169.254.0.0", &lla_ip4);
+        struct ovn_port *op;
+
+        if (od->n_router_ports == 1) {
+            struct ovn_port *peer = od->router_ports[0]->peer;
+            if (!peer || !peer->nbrp) {
+                return;
+            }
+
+            for (size_t i = 0; i < peer->od->n_router_ports; i++) {
+                op = peer->od->router_ports[i];
+                for (size_t j = 0; j < op->lrp_networks.n_ipv4_addrs; j++) {
+                    struct ipv4_netaddr *addrs;
+                    addrs = &op->lrp_networks.ipv4_addrs[j];
+                    if (addrs->plen >= 16 &&
+                        (addrs->addr & htonl(0xffff0000)) == lla_ip4) {
+                        // skip link local address
+                        continue;
+                    }
+                    match = xasprintf("ip4 && ip4.dst == %s/%u",
+                                      addrs->network_s, addrs->plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        &od->nbs->header_, lflow_ref);
+                    free(match);
+                }
+
+                for (size_t j = 0; j < op->lrp_networks.n_ipv6_addrs; j++) {
+                    struct ipv6_netaddr *addrs;
+                    addrs = &op->lrp_networks.ipv6_addrs[j];
+                    if (in6_is_lla(&addrs->network)) {
+                        // skip link local address
+                        continue;
+                    }
+                    match = xasprintf("ip6 && ip6.dst == %s/%u",
+                                      addrs->network_s, addrs->plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        &od->nbs->header_, lflow_ref);
+                    free(match);
+                }
+            }
+
+            return;
+        }
+
+        ovs_be32 ipv4;
+        struct in6_addr ipv6;
+        unsigned int plen;
+        char *error;
+        char buf[INET6_ADDRSTRLEN];
+
+        for (size_t i = 0; i < od->n_localnet_ports; i++) {
+            op = od->localnet_ports[i];
+            const char *ipv4_network = smap_get(&op->nbsp->external_ids,
+                                                "ipv4_network");
+            const char *ipv6_network = smap_get(&op->nbsp->external_ids,
+                                                "ipv6_network");
+            if (ipv4_network) {
+                error = ip_parse_cidr(ipv4_network, &ipv4, &plen);
+                if (error) {
+                    free(error);
+                    continue;
+                }
+                if (plen && plen != 32) {
+                    match = xasprintf("ip4 && ip4.dst == "IP_FMT"/%u",
+                                      IP_ARGS(ipv4), plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        &od->nbs->header_, lflow_ref);
+                    free(match);
+                }
+            }
+            if (ipv6_network) {
+                error = ipv6_parse_cidr(ipv6_network, &ipv6, &plen);
+                if (error) {
+                    free(error);
+                    continue;
+                }
+                if (plen && plen != 128) {
+                    inet_ntop(AF_INET6, &ipv6, buf, sizeof buf);
+                    match = xasprintf("ip6 && ip6.dst == %s/%u", buf, plen);
+                    ovn_lflow_add_with_kube_ovn_hint(lflows, od,
+                        S_SWITCH_IN_PRE_LB, 105, match, "next;",
+                        &od->nbs->header_, lflow_ref);
+                    free(match);
+                }
+            }
+        }
     }
 }
 
@@ -21410,6 +21540,8 @@ ovnnb_db_run(struct northd_input *input_data,
 
     sset_clear(&node_local_dns_ip_v4);
     sset_clear(&node_local_dns_ip_v6);
+    sset_clear(&skip_conntrack_dst_cidrs_v4);
+    sset_clear(&skip_conntrack_dst_cidrs_v6);
 
     const char *node_local_dns_ip = smap_get(input_data->nb_options,
                                              "node_local_dns_ip");
@@ -21430,6 +21562,67 @@ ovnnb_db_run(struct northd_input *input_data,
                 ds_clear(&s);
                 ds_put_format(&s, IP_FMT, IP_ARGS(ip4));
                 sset_add(&node_local_dns_ip_v4, ds_cstr_ro(&s));
+            }
+        }
+        ds_destroy(&s);
+        free(start);
+    }
+
+    /* Parse skip_conntrack_dst_cidrs option
+     *
+     * This option allows users to specify destination IP CIDRs that should skip conntrack
+     * processing in the ls_in_pre_lb table. This is useful for:
+     * - Reducing conntrack table usage for high-volume cross-subnet traffic
+     * - Avoiding connection tracking for services that don't need it
+     * - Performance optimization in large-scale deployments
+     *
+     * Format: "10.0.0.0/24,192.168.1.0/24,2001:db8::/64"
+     * Multiple IP CIDRs can be specified, separated by commas.
+     * Both IPv4 and IPv6 CIDR notation is supported.
+     */
+    const char *skip_conntrack_dst_cidrs = smap_get(input_data->nb_options,
+                                                  "skip_conntrack_dst_cidrs");
+    if (skip_conntrack_dst_cidrs) {
+        char *cur, *next, *start;
+        next = start = xstrdup(skip_conntrack_dst_cidrs);
+        struct ds s = DS_EMPTY_INITIALIZER;
+        while ((cur = strsep(&next, ",")) && *cur) {
+            /* Trim whitespace */
+            while (*cur == ' ' || *cur == '\t') {
+                cur++;
+            }
+            char *end = cur + strlen(cur) - 1;
+            while (end > cur && (*end == ' ' || *end == '\t')) {
+                *end = '\0';
+                end--;
+            }
+
+            if (strchr(cur, ':')) {
+                struct in6_addr ip6;
+                unsigned int plen;
+                char *slash = strchr(cur, '/');
+                if (slash) {
+                    *slash = '\0';
+                    if (ipv6_parse(cur, &ip6) &&
+                        sscanf(slash + 1, "%u", &plen) == 1 && plen <= 128) {
+                        ds_clear(&s);
+                        ds_put_format(&s, "%s/%u", cur, plen);
+                        sset_add(&skip_conntrack_dst_cidrs_v6, ds_cstr_ro(&s));
+                    }
+                }
+            } else {
+                ovs_be32 ip4;
+                unsigned int plen;
+                char *slash = strchr(cur, '/');
+                if (slash) {
+                    *slash = '\0';
+                    if (ip_parse(cur, &ip4) &&
+                        sscanf(slash + 1, "%u", &plen) == 1 && plen <= 32) {
+                        ds_clear(&s);
+                        ds_put_format(&s, IP_FMT"/%u", IP_ARGS(ip4), plen);
+                        sset_add(&skip_conntrack_dst_cidrs_v4, ds_cstr_ro(&s));
+                    }
+                }
             }
         }
         ds_destroy(&s);
