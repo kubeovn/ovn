@@ -39,10 +39,36 @@ struct laddrs_port {
     char *lport;
 };
 
+static bool
+is_kube_ovn_iface(const struct ovsrec_open_vswitch *cfg, const char *iface_id)
+{
+    if (!cfg || !iface_id) {
+        return false;
+    }
+
+    for (size_t i = 0; i < cfg->n_bridges; i++) {
+        const struct ovsrec_bridge *bridge = cfg->bridges[i];
+        for (size_t j = 0; j < bridge->n_ports; j++) {
+            const struct ovsrec_port *port = bridge->ports[j];
+            for (size_t k = 0; k < port->n_interfaces; k++) {
+                const struct ovsrec_interface *iface = port->interfaces[k];
+                const char *id = smap_get(&iface->external_ids, "iface-id");
+                const char *vendor = smap_get(&iface->external_ids, "vendor");
+                if (id && !strcmp(id, iface_id) && vendor &&
+                    !strcmp(vendor, "kube-ovn")) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 /* Get localnet vifs, local l3gw ports and ofport for localnet patch ports. */
 static void
 get_localnet_vifs_l3gwports(
     struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
+    const struct ovsrec_open_vswitch *cfg,
     const struct sbrec_chassis *chassis,
     const struct hmap *local_datapaths,
     struct sset *localnet_vifs,
@@ -73,6 +99,9 @@ get_localnet_vifs_l3gwports(
 
             /* Get all vifs that are directly connected to a localnet port. */
             if (!strcmp(pb->type, "") && pb->chassis == chassis) {
+                if (is_kube_ovn_iface(cfg, pb->logical_port)) {
+                    continue;
+                }
                 sset_add(localnet_vifs, pb->logical_port);
             }
         }
@@ -483,6 +512,7 @@ garp_rarp_run(struct garp_rarp_ctx_in *r_ctx_in)
 
     reset_timers_for_claimed_cr(r_ctx_in->mgr);
     get_localnet_vifs_l3gwports(r_ctx_in->sbrec_port_binding_by_datapath,
+                                r_ctx_in->cfg,
                                 r_ctx_in->chassis,
                                 r_ctx_in->local_datapaths,
                                 &localnet_vifs, &local_l3gw_ports);
