@@ -1726,10 +1726,11 @@ encode_SELECT(const struct ovnact_select *select,
     struct ofpact_group *og;
 
     struct ds ds = DS_EMPTY_INITIALIZER;
-    ds_put_format(&ds, "type=select,selection_method=%s",
-                  select->hash_fields ? "hash": "dp_hash");
     if (select->hash_fields) {
-      ds_put_format(&ds, ",fields(%s)", select->hash_fields);
+        ds_put_format(&ds, "type=select,selection_method=hash,fields(%s)",
+                      select->hash_fields);
+    } else {
+        ds_put_format(&ds, "type=select,selection_method=hash,fields=ip_src");
     }
 
     if (ovs_feature_is_supported(OVS_DP_HASH_L4_SYM_SUPPORT) &&
