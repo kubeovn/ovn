@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/utsname.h>
 
 #include "bfd.h"
 #include "binding.h"
@@ -104,6 +105,8 @@
 #include "evpn-mac-binding-sync.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
+
+bool lflow_kube_ovn_skip_ct = true;
 
 static unixctl_cb_func ct_zone_list;
 static unixctl_cb_func extend_table_list;
@@ -7378,6 +7381,17 @@ main(int argc, char *argv[])
     service_start(&argc, &argv);
     char *ovs_remote = parse_options(argc, argv);
     fatal_ignore_sigpipe();
+
+    struct utsname info;
+    if (!uname(&info)) {
+        int kernel, major, minor, patch;
+        if (strstr(info.release, "el8") &&
+            sscanf(info.release, "%d.%d.%d-%d", &kernel, &major,
+                   &minor, &patch) == 4 && kernel == 4 && major == 18 &&
+            minor == 0 && patch == 372) {
+            lflow_kube_ovn_skip_ct = false;
+        }
+    }
 
     daemonize_start(true, false);
 

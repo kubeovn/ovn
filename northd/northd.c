@@ -6832,7 +6832,7 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
         if (!ls_ct_skip_dst_lport_ips) {
             return;
         }
-        if (od->n_router_ports != 1 && od->n_localnet_ports == 0) {
+        if (vector_len(&od->router_ports) != 1 && vector_len(&od->localnet_ports) == 0) {
             return;
         }
 
@@ -6840,14 +6840,15 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
         inet_pton(AF_INET, "169.254.0.0", &lla_ip4);
         struct ovn_port *op;
 
-        if (od->n_router_ports == 1) {
-            struct ovn_port *peer = od->router_ports[0]->peer;
+        if (vector_len(&od->router_ports) == 1) {
+            struct ovn_port *peer = vector_get(&od->router_ports, 0,
+                                               struct ovn_port *)->peer;
             if (!peer || !peer->nbrp) {
                 return;
             }
 
-            for (size_t i = 0; i < peer->od->n_router_ports; i++) {
-                op = peer->od->router_ports[i];
+            for (size_t i = 0; i < vector_len(&peer->od->router_ports); i++) {
+                op = vector_get(&peer->od->router_ports, i, struct ovn_port *);
                 for (size_t j = 0; j < op->lrp_networks.n_ipv4_addrs; j++) {
                     struct ipv4_netaddr *addrs;
                     addrs = &op->lrp_networks.ipv4_addrs[j];
@@ -6889,8 +6890,8 @@ build_ls_stateful_rec_pre_lb(const struct ls_stateful_record *ls_stateful_rec,
         char *error;
         char buf[INET6_ADDRSTRLEN];
 
-        for (size_t i = 0; i < od->n_localnet_ports; i++) {
-            op = od->localnet_ports[i];
+        for (size_t i = 0; i < vector_len(&od->localnet_ports); i++) {
+            op = vector_get(&od->localnet_ports, i, struct ovn_port *);
             const char *ipv4_network = smap_get(&op->nbsp->external_ids,
                                                 "ipv4_network");
             const char *ipv6_network = smap_get(&op->nbsp->external_ids,
@@ -9171,7 +9172,7 @@ build_lswitch_dnat_mod_dl_dst_rules(struct ovn_port *op,
     if (!ls_dnat_mod_dl_dst) {
         return;
     }
-    if (!op->nbsp || !op->od || !op->od->nbs || op->od->n_router_ports) {
+    if (!op->nbsp || !op->od || !op->od->nbs || vector_len(&op->od->router_ports)) {
         return;
     }
     if (!strcmp(op->nbsp->type, "virtual") ||
@@ -9218,7 +9219,7 @@ build_lswitch_mod_dl_src_rules(struct ovn_port *op,
                                struct ds *match)
 {
     if (!op->nbsp || !op->od || !op->od->nbs ||
-        !op->od->n_router_ports || !op->od->n_localnet_ports) {
+        vector_is_empty(&op->od->router_ports) || vector_is_empty(&op->od->localnet_ports)) {
         return;
     }
     if (!lsp_is_enabled(op->nbsp)) {
@@ -9243,8 +9244,9 @@ build_lswitch_mod_dl_src_rules(struct ovn_port *op,
                   op->lsp_addrs[0].ea_s,
                   ovn_stage_get_table(S_SWITCH_IN_L2_LKUP));
 
-    for (size_t i = 0; i < op->od->n_router_ports; i++) {
-        struct ovn_port *rp = op->od->router_ports[i];
+    for (size_t i = 0; i < vector_len(&op->od->router_ports); i++) {
+        struct ovn_port *rp = vector_get(&op->od->router_ports, i,
+                                         struct ovn_port *);
         if (!rp || !rp->nbsp) {
             continue;
         }
@@ -10755,8 +10757,9 @@ build_lswitch_arp_nd_responder_known_ips(struct ovn_port *op,
             lsp_is_router(op->nbsp)) {
             ovs_be32 lla_ip4;
             inet_pton(AF_INET, "169.254.0.0", &lla_ip4);
-            for (size_t i = 0; i < op->od->n_localnet_ports; i++) {
-                struct ovn_port *localnet_port = op->od->localnet_ports[i];
+            for (size_t i = 0; i < vector_len(&op->od->localnet_ports); i++) {
+                struct ovn_port *localnet_port = vector_get(
+                    &op->od->localnet_ports, i, struct ovn_port *);
                 for (size_t j = 0; j < lrp->lrp_networks.n_ipv4_addrs; j++) {
                     struct ipv4_netaddr *addrs;
                     addrs = &lrp->lrp_networks.ipv4_addrs[j];
@@ -11071,8 +11074,9 @@ build_lswitch_arp_nd_forward_for_unknown_ips(struct ovn_port *op,
         return;
     }
 
-    for (size_t i = 0; i < op->od->n_localnet_ports; i++) {
-        struct ovn_port *localnet_port = op->od->localnet_ports[i];
+    for (size_t i = 0; i < vector_len(&op->od->localnet_ports); i++) {
+        struct ovn_port *localnet_port = vector_get(
+            &op->od->localnet_ports, i, struct ovn_port *);
         if (!localnet_port->nbsp) {
             continue;
         }

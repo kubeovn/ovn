@@ -721,7 +721,6 @@ check_nb_options_out_of_sync(
 
     if (config_out_of_sync(&nb->options, &config_data->nb_options,
                            "acl_ct_translation", false)) {
-                           "acl_ct_translation", false)) {
         return true;
     }
 

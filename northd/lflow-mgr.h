@@ -89,6 +89,7 @@ struct lflow_table_add_args {
     struct lflow_ref *lflow_ref;
     const char *where;
     bool acl_ct_translation;
+    const char *kube_ovn_hint;
 };
 
 void lflow_table_add_lflow(struct lflow_table_add_args *args);
@@ -108,6 +109,7 @@ void lflow_table_add_lflow(struct lflow_table_add_args *args);
 #define WITH_IO_PORT(IO_PORT) .io_port = IO_PORT
 #define WITH_CTRL_METER(CTRL_METER) .ctrl_meter = CTRL_METER
 #define WITH_DESC(FLOW_DESC) .flow_desc = FLOW_DESC
+#define WITH_KUBE_OVN_HINT(HINT) .kube_ovn_hint = HINT
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
 #define ovn_lflow_add_default_drop(LFLOW_TABLE, OD, STAGE, LFLOW_REF, ...) \
@@ -129,6 +131,31 @@ void lflow_table_add_lflow(struct lflow_table_add_args *args);
             __VA_ARGS__ \
         } \
     )
+
+#define ovn_lflow_add_with_hint(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
+                                ACTIONS, STAGE_HINT, LFLOW_REF) \
+    ovn_lflow_add(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
+                  LFLOW_REF, WITH_HINT(STAGE_HINT))
+
+#define ovn_lflow_add_with_lport_and_hint(LFLOW_TABLE, OD, STAGE, PRIORITY, \
+                                          MATCH, ACTIONS, IN_OUT_PORT, \
+                                          STAGE_HINT, LFLOW_REF) \
+    ovn_lflow_add(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
+                  LFLOW_REF, WITH_IO_PORT(IN_OUT_PORT), WITH_HINT(STAGE_HINT))
+
+#define ovn_lflow_add_with_hint__(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, \
+                                  ACTIONS, IN_OUT_PORT, CTRL_METER, \
+                                  STAGE_HINT, LFLOW_REF) \
+    ovn_lflow_add(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
+                  LFLOW_REF, WITH_IO_PORT(IN_OUT_PORT), \
+                  WITH_CTRL_METER(CTRL_METER), WITH_HINT(STAGE_HINT))
+
+#define ovn_lflow_add_with_kube_ovn_hint(LFLOW_TABLE, OD, STAGE, PRIORITY, \
+                                         MATCH, ACTIONS, STAGE_HINT, \
+                                         LFLOW_REF) \
+    ovn_lflow_add(LFLOW_TABLE, OD, STAGE, PRIORITY, MATCH, ACTIONS, \
+                  LFLOW_REF, WITH_HINT(STAGE_HINT), \
+                  WITH_KUBE_OVN_HINT(OVN_LFLOW_HINT_KUBE_OVN_SKIP_CT))
 
 #define ovn_lflow_add_with_dp_group(LFLOW_TABLE, DP_BITMAP, DP_BITMAP_LEN, \
                                     STAGE, PRIORITY, MATCH, ACTIONS, \

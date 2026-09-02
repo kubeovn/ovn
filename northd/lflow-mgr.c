@@ -40,7 +40,8 @@ static void ovn_lflow_init(struct ovn_lflow *,
                            char *actions, char *io_port,
                            char *ctrl_meter, char *stage_hint,
                            bool acl_ct_translation, const char *where,
-                           const char *flow_desc, struct uuid sbuuid);
+                           const char *flow_desc, struct uuid sbuuid,
+                           const char *kube_ovn_hint);
 static struct ovn_lflow *ovn_lflow_find(const struct hmap *lflows,
                                         const struct ovn_stage *stage,
                                         uint16_t priority, const char *match,
@@ -59,7 +60,7 @@ static struct ovn_lflow *do_ovn_lflow_add(
     const char *ctrl_meter,
     const struct ovsdb_idl_row *stage_hint,
     const char *where, const char *flow_desc,
-    bool acl_ct_translation);
+    bool acl_ct_translation, const char *kube_ovn_hint);
 
 
 static struct ovs_mutex *lflow_hash_lock(const struct hmap *lflow_table,
@@ -187,6 +188,7 @@ struct ovn_lflow {
     struct ovn_dp_group *dpg;    /* Link to unique Sb datapath group. */
     const char *where;
     const char *flow_desc;
+    char *kube_ovn_hint;
     bool acl_ct_translation;     /* Use CT-based L4 field translation. */
 
     struct uuid sb_uuid;         /* SB DB row uuid, specified by northd. */
@@ -741,7 +743,8 @@ lflow_table_add_lflow__(struct lflow_table *lflow_table,
                         bool acl_ct_translation,
                         const struct ovsdb_idl_row *stage_hint,
                         const char *where, const char *flow_desc,
-                        struct lflow_ref *lflow_ref)
+                        struct lflow_ref *lflow_ref,
+                        const char *kube_ovn_hint)
     OVS_EXCLUDED(fake_hash_mutex)
 {
     struct ovs_mutex *hash_lock;
@@ -763,7 +766,7 @@ lflow_table_add_lflow__(struct lflow_table *lflow_table,
                              : dp_bitmap_len,
                          hash, stage, priority, match, actions,
                          io_port, ctrl_meter, stage_hint, where, flow_desc,
-                         acl_ct_translation);
+                         acl_ct_translation, kube_ovn_hint);
 
     if (lflow_ref) {
         struct lflow_ref_node *lrn =
@@ -824,7 +827,7 @@ lflow_table_add_lflow(struct lflow_table_add_args *args)
                             args->match, args->actions, args->io_port,
                             args->ctrl_meter, args->acl_ct_translation,
                             args->stage_hint, args->where, args->flow_desc,
-                            args->lflow_ref);
+                            args->lflow_ref, args->kube_ovn_hint);
 }
 
 struct ovn_dp_group *
@@ -942,7 +945,8 @@ ovn_lflow_init(struct ovn_lflow *lflow,
                size_t dp_bitmap_len, const struct ovn_stage *stage,
                uint16_t priority, char *match, char *actions, char *io_port,
                char *ctrl_meter, char *stage_hint, bool acl_ct_translation,
-               const char *where, const char *flow_desc, struct uuid sbuuid)
+               const char *where, const char *flow_desc, struct uuid sbuuid,
+               const char *kube_ovn_hint)
 {
     dynamic_bitmap_alloc(&lflow->dpg_bitmap, dp_bitmap_len);
     lflow->dp = dp;
@@ -959,6 +963,7 @@ ovn_lflow_init(struct ovn_lflow *lflow,
     lflow->sb_uuid = sbuuid;
     lflow->sync_state = LFLOW_TO_SYNC;
     lflow->acl_ct_translation = acl_ct_translation;
+    lflow->kube_ovn_hint = nullable_xstrdup(kube_ovn_hint);
     hmap_init(&lflow->dp_refcnts_map);
     ovs_list_init(&lflow->referenced_by);
 }
@@ -1038,6 +1043,7 @@ ovn_lflow_destroy(struct lflow_table *lflow_table, struct ovn_lflow *lflow)
     free(lflow->io_port);
     free(lflow->stage_hint);
     free(lflow->ctrl_meter);
+    free(lflow->kube_ovn_hint);
     ovn_lflow_clear_dp_refcnts_map(lflow);
     struct lflow_ref_node *lrn;
     LIST_FOR_EACH_SAFE (lrn, ref_list_node, &lflow->referenced_by) {
@@ -1053,7 +1059,7 @@ do_ovn_lflow_add(struct lflow_table *lflow_table, size_t dp_bitmap_len,
                  const char *io_port, const char *ctrl_meter,
                  const struct ovsdb_idl_row *stage_hint,
                  const char *where, const char *flow_desc,
-                 bool acl_ct_translation)
+                 bool acl_ct_translation, const char *kube_ovn_hint)
     OVS_REQUIRES(fake_hash_mutex)
 {
     struct ovn_lflow *old_lflow;
@@ -1084,7 +1090,7 @@ do_ovn_lflow_add(struct lflow_table *lflow_table, size_t dp_bitmap_len,
                    nullable_xstrdup(ctrl_meter),
                    ovn_lflow_hint(stage_hint),
                    acl_ct_translation, where,
-                   flow_desc, sbuuid);
+                   flow_desc, sbuuid, kube_ovn_hint);
 
     if (parallelization_state != STATE_USE_PARALLELIZATION) {
         hmap_insert(&lflow_table->entries, &lflow->hmap_node, hash);
@@ -1174,6 +1180,9 @@ sync_lflow_to_sb(struct ovn_lflow *lflow,
         if (lflow->stage_hint) {
             smap_add(&ids, "stage-hint", lflow->stage_hint);
         }
+        if (lflow->kube_ovn_hint) {
+            smap_add(&ids, "kube-ovn-hint", lflow->kube_ovn_hint);
+        }
         sbrec_logical_flow_set_external_ids(sbflow, &ids);
         smap_destroy(&ids);
 
@@ -1188,6 +1197,8 @@ sync_lflow_to_sb(struct ovn_lflow *lflow,
                                                   "stage-hint", "");
             const char *source = smap_get_def(&sbflow->external_ids,
                                               "source", "");
+            const char *kube_ovn_hint = smap_get_def(
+                &sbflow->external_ids, "kube-ovn-hint", "");
 
             if (strcmp(stage_name, ovn_stage_to_str(lflow->stage))) {
                 sbrec_logical_flow_update_external_ids_setkey(
@@ -1217,6 +1228,11 @@ sync_lflow_to_sb(struct ovn_lflow *lflow,
                     sbrec_logical_flow_update_external_ids_setkey(
                         sbflow, "source", where);
                 }
+            }
+            if (lflow->kube_ovn_hint &&
+                strcmp(kube_ovn_hint, lflow->kube_ovn_hint)) {
+                sbrec_logical_flow_update_external_ids_setkey(
+                    sbflow, "kube-ovn-hint", lflow->kube_ovn_hint);
             }
         }
     }
