@@ -3401,10 +3401,7 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
                      struct ds *skip_snat_action,
                      struct ds *force_snat_action,
                      const struct svc_monitors_map_data *svc_mons_data,
-                     bool ls_dp,
-                     const struct hmap *svc_monitor_map,
-                     const char* chassis_backend_ips,
-                     const struct sset *chassis_logical_ports)
+                     bool ls_dp)
 {
     bool reject =
         vector_is_empty(&lb_vip->backends) && lb_vip->empty_backend_rej;
@@ -3434,13 +3431,10 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
                 &lb_vip_nb->backends_nb[i++];
             bool ipv6_backend = !IN6_IS_ADDR_V4MAPPED(&backend->ip);
 
-            if (chassis_logical_ports) {
-                if (!sset_contains(chassis_logical_ports, backend_nb->logical_port)) {
-                    continue;
-                }
-            }
-
-            if (lb_vip_nb->lb_health_check && !backend_nb->health_check) {
+            /* XXX: Remove these checks: by changing the iteration
+             * only for selected backends. */
+            if (lb_vip_nb->lb_health_check &&
+                !backend_nb->health_check) {
                 continue;
             }
 
@@ -3470,11 +3464,7 @@ build_lb_vip_actions(const struct ovn_northd_lb *lb,
         drop = !n_active_backends && !lb_vip->empty_backend_rej;
         reject = !n_active_backends && lb_vip->empty_backend_rej;
     } else {
-        if (chassis_backend_ips) {
-            ds_put_format(action, "%s", chassis_backend_ips);
-        } else {
-            ds_put_format(action, "%s", lb_vip_nb->backend_ips);
-        }
+        ds_put_format(action, "%s", lb_vip_nb->backend_ips);
     }
 
     if (reject) {
@@ -9101,9 +9091,7 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
                const struct ovn_datapaths *ls_datapaths,
                struct ds *match, struct ds *action,
                const struct shash *meter_groups,
-               const struct svc_monitors_map_data *svc_mons_data,
-               const struct hmap *svc_monitor_map,
-               const struct hmap *ls_ports)
+               const struct svc_monitors_map_data *svc_mons_data)
 {
     const struct ovn_northd_lb *lb = lb_dps->lb;
     for (size_t i = 0; i < lb->n_vips; i++) {
@@ -9114,121 +9102,13 @@ build_lb_rules(struct lflow_table *lflows, struct ovn_lb_datapaths *lb_dps,
 
         ds_clear(action);
         ds_clear(match);
-        if (lb->prefer_local_backend) {
-            struct hmap chassis_lsp_map;
-            hmap_init(&chassis_lsp_map);
 
-            for (size_t j = 0; j < lb_vip->n_backends; j++) {
-                struct ovn_lb_backend *backend = &lb_vip->backends[j];
-                struct ovn_northd_lb_backend *backend_nb = &lb_vip_nb->backends_nb[j];
-                if (!backend_nb->logical_port) {
-                    continue;
-                }
-                struct ovn_port *op = ovn_port_find(ls_ports, backend_nb->logical_port);
-                if (!op || !op->sb || !op->sb->chassis) {
-                    continue;
-                }
-                struct chassis_lp_entry *entry = (struct chassis_lp_entry *)hmap_first_with_hash(&chassis_lsp_map, hash_string(op->sb->chassis->name, 0));
-                if (!entry) {
-                    entry = xmalloc(sizeof *entry);
-                    entry->chassis = op->sb->chassis;
-                    entry->lp_array = NULL;
-                    entry->n_lps = 0;
-                    entry->backend_ips = xstrdup("");
-                    hmap_insert(&chassis_lsp_map, &entry->hmap_node, hash_string(op->sb->chassis->name, 0));
-                    sset_init(&entry->logical_ports);
-                }
-
-                entry->lp_array = xrealloc(entry->lp_array, sizeof *entry->lp_array * (entry->n_lps + 1));
-                entry->lp_array[entry->n_lps] = op;
-                entry->n_lps++;
-
-                char *new_backend_ips = xasprintf("%s%s%s:%s", entry->backend_ips, entry->n_lps > 1 ? "," : "", backend->ip_str, backend->port_str);
-                free(entry->backend_ips);
-                entry->backend_ips = new_backend_ips;
-                sset_add(&entry->logical_ports, backend_nb->logical_port);
-            }
-
-            struct chassis_lp_entry *entry = NULL;
-            HMAP_FOR_EACH (entry, hmap_node, &chassis_lsp_map) {
-                ds_clear(match);
-                ds_clear(action);
-
-                /* New connections in Ingress table. */
-                const char *meter = NULL;
-                bool reject = build_lb_vip_actions(lb, lb_vip, lb_vip_nb, action,
-                                                   lb->selection_fields,
-                                                   NULL, NULL, svc_mons_data, true,
-                                                   svc_monitor_map,
-                                                   entry->backend_ips, 
-                                                   &entry->logical_ports);
-
-                ds_put_format(match, "ct.new && %s.dst == %s", ip_match,
-                            lb_vip->vip_str);
-                int priority = 130;
-                if (lb_vip->port_str) {
-                    ds_put_format(match, " && %s.dst == %s", lb->proto,
-                                lb_vip->port_str);
-                    priority = 140;
-                }
-                ds_put_format(match, " && is_chassis_resident(\"%s\")",
-                        entry->lp_array[0]->key);
-
-                build_lb_affinity_ls_flows(lflows, lb_dps, lb_vip, ls_datapaths,
-                                        lb_dps->lflow_ref);
-
-                unsigned long *dp_non_meter = NULL;
-                bool build_non_meter = false;
-                if (reject) {
-                    size_t index;
-
-                    dp_non_meter = bitmap_clone(lb_dps->nb_ls_map,
-                                                ods_size(ls_datapaths));
-                    BITMAP_FOR_EACH_1 (index, ods_size(ls_datapaths),
-                                    lb_dps->nb_ls_map) {
-                        struct ovn_datapath *od = ls_datapaths->array[index];
-
-                        meter = copp_meter_get(COPP_REJECT, od->nbs->copp,
-                                            meter_groups);
-                        if (!meter) {
-                            build_non_meter = true;
-                            continue;
-                        }
-                        bitmap_set0(dp_non_meter, index);
-                        ovn_lflow_add_with_hint__(
-                                lflows, od, S_SWITCH_IN_LB, priority,
-                                ds_cstr(match), ds_cstr(action),
-                                NULL, meter, &lb->nlb->header_,
-                                lb_dps->lflow_ref);
-                    }
-                }
-                if (!reject || build_non_meter) {
-                    ovn_lflow_add_with_dp_group(
-                        lflows, dp_non_meter ? dp_non_meter : lb_dps->nb_ls_map,
-                        ods_size(ls_datapaths), S_SWITCH_IN_LB, priority,
-                        ds_cstr(match), ds_cstr(action), &lb->nlb->header_,
-                        lb_dps->lflow_ref);
-                }
-                bitmap_free(dp_non_meter);
-            }
-
-            struct chassis_lp_entry *next;
-            HMAP_FOR_EACH_SAFE (entry, next, hmap_node, &chassis_lsp_map) {
-                free(entry->lp_array);
-                free(entry->backend_ips);
-                free(entry);
-            }
-            hmap_destroy(&chassis_lsp_map);
-        }
-
-        ds_clear(match);
-        ds_clear(action);
         /* New connections in Ingress table. */
         const char *meter = NULL;
         bool reject = build_lb_vip_actions(lb, lb_vip, lb_vip_nb, action,
                                            lb->selection_fields,
-                                           NULL, NULL, svc_mons_data, true,
-                                           svc_monitor_map, NULL, NULL);
+                                           NULL, NULL,
+                                           svc_mons_data, true);
 
         ds_put_format(match, "ct.new && %s.dst == %s", ip_match,
                       lb_vip->vip_str);
@@ -13847,8 +13727,8 @@ build_lrouter_nat_flows_for_lb(
                                        lb->selection_fields,
                                        &skip_snat_act,
                                        &force_snat_act,
-                                       svc_mons_data, false,
-                                       svc_monitor_map, NULL, NULL);
+                                       svc_mons_data,
+                                       false);
 
     /* Higher priority rules are added for load-balancing in DNAT
      * table.  For every match (on a VIP[:port]), we add two flows.
@@ -14005,8 +13885,6 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
                            const struct shash *meter_groups,
                            const struct ovn_datapaths *ls_datapaths,
                            const struct svc_monitors_map_data *svc_mons_data,
-                           const struct hmap *svc_monitor_map,
-                           const struct hmap *ls_ports,
                            struct ds *match, struct ds *action)
 {
     if (dynamic_bitmap_is_empty(&lb_dps->nb_ls_map)) {
@@ -14048,7 +13926,7 @@ build_lswitch_flows_for_lb(struct ovn_lb_datapaths *lb_dps,
      * REGBIT_CONNTRACK_COMMIT. */
     build_lb_rules_pre_stateful(lflows, lb_dps, ls_datapaths, match, action);
     build_lb_rules(lflows, lb_dps, ls_datapaths, match, action,
-                   meter_groups, svc_mons_data, svc_monitor_map, ls_ports);
+                   meter_groups, svc_mons_data);
     build_lb_rules_for_stateless_acl(lflows, lb_dps);
 }
 
@@ -20289,8 +20167,6 @@ build_lflows_thread(void *arg)
                                                lsi->meter_groups,
                                                lsi->ls_datapaths,
                                                &svc_mons_data,
-                                               lsi->svc_monitor_map,
-                                               lsi->ls_ports,
                                                &lsi->match, &lsi->actions);
                 }
             }
@@ -20533,8 +20409,6 @@ build_lswitch_and_lrouter_flows(
             build_lswitch_flows_for_lb(lb_dps, lsi.lflows, lsi.meter_groups,
                                        lsi.ls_datapaths,
                                        svc_mons_data,
-                                       lsi.svc_monitor_map,
-                                       lsi.ls_ports,
                                        &lsi.match, &lsi.actions);
         }
         stopwatch_stop(LFLOWS_LBS_STOPWATCH_NAME, time_msec());
@@ -20880,8 +20754,6 @@ lflow_handle_northd_lb_changes(struct ovsdb_idl_txn *ovnsb_txn,
                                    lflow_input->meter_groups,
                                    lflow_input->ls_datapaths,
                                    &svc_mons_data,
-                                   lflow_input->svc_monitor_map,
-                                   lflow_input->ls_ports,
                                    &match, &actions);
 
         ds_destroy(&match);

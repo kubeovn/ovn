@@ -219,36 +219,6 @@ cleanup:
     ds_destroy(&key);
 }
 
-static void
-ovn_lb_backend_set_logical_port(const struct ovn_northd_lb *lb,
-                                const struct ovn_lb_vip *lb_vip,
-                                struct ovn_northd_lb_vip *lb_vip_nb)
-{
-    struct ds key = DS_EMPTY_INITIALIZER;
-    for (size_t j = 0; j < lb_vip->n_backends; j++) {
-        struct ovn_lb_backend *backend = &lb_vip->backends[j];
-        ds_clear(&key);
-        ds_put_format(&key, IN6_IS_ADDR_V4MAPPED(&lb_vip->vip)
-                      ? "%s" : "[%s]", backend->ip_str);
-        const char *s = smap_get(&lb->nlb->ip_port_mappings, ds_cstr(&key));
-        if (!s) {
-            continue;
-        }
-        char *port_name = xstrdup(s);
-        char *p = strstr(port_name, ":");
-        if (p) {
-            *p = 0;
-        }
-        struct ovn_northd_lb_backend *backend_nb =
-            &lb_vip_nb->backends_nb[j];
-        backend_nb->logical_port = xstrdup(port_name);
-        
-        free(port_name);
-    }
-
-    ds_destroy(&key);
-}
-
 static
 void ovn_northd_lb_vip_destroy(struct ovn_northd_lb_vip *vip)
 {
@@ -394,8 +364,6 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
     const char *mode = smap_get(&nbrec_lb->options, "neighbor_responder");
     lb->neigh_mode = ovn_lb_get_neigh_mode(nbrec_lb, mode, template);
 
-    lb->prefer_local_backend = smap_get_bool(&nbrec_lb->options, "prefer_local_backend", false);
-
     uint32_t affinity_timeout =
         smap_get_uint(&nbrec_lb->options, "affinity_timeout", 0);
     if (affinity_timeout > UINT16_MAX) {
@@ -459,8 +427,6 @@ ovn_northd_lb_init(struct ovn_northd_lb *lb,
 
         if (lb_vip_nb->lb_health_check || lb->is_distributed) {
             ovn_lb_vip_backends_ip_port_mappings_init(lb, lb_vip, lb_vip_nb);
-        } else if (lb->prefer_local_backend) {
-            ovn_lb_backend_set_logical_port(lb, lb_vip, lb_vip_nb);
         }
     }
 
